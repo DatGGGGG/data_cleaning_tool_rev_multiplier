@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { startTransition, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { appApiPath } from "@/lib/app-path";
 import type {
   ActivityLogEntry,
   PublisherOverviewRow,
@@ -59,7 +60,7 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
   }
 
   async function postOverview(body: Record<string, string>, message: string) {
-    const response = await fetch("/api/top-down/overview", {
+    const response = await fetch(appApiPath("/api/top-down/overview"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -74,7 +75,7 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
     setIsBusy(true);
     try {
       const response = await fetch(
-        `/api/top-down/overview?operatorName=${encodeURIComponent(operatorName)}`,
+        appApiPath(`/api/top-down/overview?operatorName=${encodeURIComponent(operatorName)}`),
         { cache: "no-store" },
       );
       const payload = await parseResponse(response);
@@ -89,7 +90,7 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
   async function saveVersion() {
     setIsBusy(true);
     try {
-      const response = await fetch("/api/top-down/versions", {
+      const response = await fetch(appApiPath("/api/top-down/versions"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -109,7 +110,7 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
     setIsBusy(true);
     try {
       const response = await fetch(
-        `/api/top-down/export?operatorName=${encodeURIComponent(operatorName)}`,
+        appApiPath(`/api/top-down/export?operatorName=${encodeURIComponent(operatorName)}`),
         { cache: "no-store" },
       );
 

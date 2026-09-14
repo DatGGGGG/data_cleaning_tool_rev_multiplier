@@ -136,7 +136,16 @@ docker compose ps
 docker compose logs -f sensortower-cleaning-workbench
 ```
 
-The default URL is `http://<vm-host-or-ip>:3015`. Use another port only when needed:
+The service joins the existing `market-data-gateway` Docker network and is
+available publicly through the gateway at:
+
+```text
+https://market-data.garena.vn/cleaning/sensortower/
+```
+
+The application image is built with that path as its Next.js base path. Keep
+the trailing slash when opening it directly. Port `3015` remains available on
+the VM for local troubleshooting only. Use another port only when needed:
 
 ```bash
 WORKBENCH_PORT=3015 docker compose up -d --build

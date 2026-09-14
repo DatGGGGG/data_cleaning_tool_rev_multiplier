@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ChangeEvent, startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { appApiPath } from "@/lib/app-path";
 import {
   createEmptyRow,
   createIdleResolutionState,
@@ -585,7 +586,7 @@ export function PublisherGamesEditor({ initialState, publisherKey }: PublisherGa
     const publishersToSave = stateRef.current.publishers;
     setIsBusy(true);
     try {
-      const response = await fetch("/api/top-down/workbench", {
+      const response = await fetch(appApiPath("/api/top-down/workbench"), {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -1094,7 +1095,7 @@ export function PublisherGamesEditor({ initialState, publisherKey }: PublisherGa
         return;
       }
 
-      const response = await fetch("/api/top-down/sensortower/lookup-app", {
+      const response = await fetch(appApiPath("/api/top-down/sensortower/lookup-app"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1202,7 +1203,7 @@ export function PublisherGamesEditor({ initialState, publisherKey }: PublisherGa
     }
 
     try {
-      const response = await fetch("/api/top-down/sensortower/resolve", {
+      const response = await fetch(appApiPath("/api/top-down/sensortower/resolve"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1341,7 +1342,7 @@ export function PublisherGamesEditor({ initialState, publisherKey }: PublisherGa
       formData.set("publisherKey", publisher.key);
       formData.set("operatorName", operatorName);
 
-      const response = await fetch("/api/top-down/import", {
+      const response = await fetch(appApiPath("/api/top-down/import"), {
         method: "POST",
         body: formData,
       });

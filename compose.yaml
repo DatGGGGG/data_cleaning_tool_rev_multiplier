@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_BASE_PATH: /cleaning/sensortower
     container_name: sensortower-cleaning-workbench
     restart: unless-stopped
     env_file:
@@ -18,12 +20,16 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - sensortower_cleaning_storage:/app/storage
+    networks:
+      market_data_gateway:
+        aliases:
+          - sensortower-cleaning-workbench
     healthcheck:
       test:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3000/').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+        - "fetch('http://127.0.0.1:3000/cleaning/sensortower/').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
       interval: 30s
       timeout: 10s
       retries: 3
@@ -32,3 +38,8 @@ services:
 volumes:
   sensortower_cleaning_storage:
     name: sensortower_cleaning_storage
+
+networks:
+  market_data_gateway:
+    external: true
+    name: market-data-gateway

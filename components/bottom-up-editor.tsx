@@ -13,6 +13,7 @@ import type {
   BottomUpWorkbenchState,
 } from "@/lib/bottom-up/types";
 import { createEmptyBottomUpRow, formatAuditDate } from "@/lib/bottom-up/workbench";
+import { appApiPath } from "@/lib/app-path";
 
 type BottomUpEditorProps = {
   initialState: BottomUpWorkbenchState;
@@ -608,7 +609,7 @@ export function BottomUpEditor({
     }
     setSaveState("saving");
     try {
-      const response = await fetch("/api/bottom-up/workbench", {
+      const response = await fetch(appApiPath("/api/bottom-up/workbench"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ operatorName, rows }),
@@ -628,7 +629,7 @@ export function BottomUpEditor({
   async function reloadWorkbench() {
     setIsBusy(true);
     try {
-      const response = await fetch(`/api/bottom-up/workbench?operatorName=${encodeURIComponent(operatorName)}`, {
+      const response = await fetch(appApiPath(`/api/bottom-up/workbench?operatorName=${encodeURIComponent(operatorName)}`), {
         cache: "no-store",
       });
       const payload = await parseResponse(response);
@@ -642,7 +643,7 @@ export function BottomUpEditor({
 
   async function loadPublisherRegistry() {
     try {
-      const response = await fetch("/api/top-down/registry", { cache: "no-store" });
+      const response = await fetch(appApiPath("/api/top-down/registry"), { cache: "no-store" });
       const raw = await response.text();
       const payload = raw ? (JSON.parse(raw) as RegistryResponse) : ({} as RegistryResponse);
       if (!response.ok) {
@@ -694,7 +695,7 @@ export function BottomUpEditor({
         sortDirection: step1SortDirection,
         filters: JSON.stringify(step1AppliedFilters),
       });
-      const response = await fetch(`/api/bottom-up/step1-publishers?${query.toString()}`, {
+      const response = await fetch(appApiPath(`/api/bottom-up/step1-publishers?${query.toString()}`), {
         cache: "no-store",
       });
       const raw = await response.text();
@@ -715,7 +716,7 @@ export function BottomUpEditor({
 
   async function toggleStep1CheckedPublisherName(publisherName: string, checked: boolean) {
     try {
-      const response = await fetch("/api/bottom-up/step1-publishers/check", {
+      const response = await fetch(appApiPath("/api/bottom-up/step1-publishers/check"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -788,7 +789,7 @@ export function BottomUpEditor({
 
     setIsBusy(true);
     try {
-      const response = await fetch("/api/bottom-up/step1-publishers/check", {
+      const response = await fetch(appApiPath("/api/bottom-up/step1-publishers/check"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1071,7 +1072,7 @@ export function BottomUpEditor({
       const formData = new FormData();
       formData.set("file", file);
       formData.set("operatorName", operatorName);
-      const response = await fetch("/api/bottom-up/import", {
+      const response = await fetch(appApiPath("/api/bottom-up/import"), {
         method: "POST",
         body: formData,
       });
@@ -1092,7 +1093,7 @@ export function BottomUpEditor({
     setProductionSyncStageIndex(0);
     setStatusMessage("Loading production App Full Info. Existing rows are upserted by publisher_id.");
     try {
-      const response = await fetch("/api/bottom-up/production-sync", {
+      const response = await fetch(appApiPath("/api/bottom-up/production-sync"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ operatorName }),
@@ -1115,7 +1116,7 @@ export function BottomUpEditor({
   async function exportCsv() {
     setIsBusy(true);
     try {
-      const response = await fetch(`/api/bottom-up/export?operatorName=${encodeURIComponent(operatorName)}`, {
+      const response = await fetch(appApiPath(`/api/bottom-up/export?operatorName=${encodeURIComponent(operatorName)}`), {
         cache: "no-store",
       });
       if (!response.ok) {
@@ -1144,7 +1145,7 @@ export function BottomUpEditor({
   async function saveVersion() {
     setIsBusy(true);
     try {
-      const response = await fetch("/api/bottom-up/versions", {
+      const response = await fetch(appApiPath("/api/bottom-up/versions"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ operatorName }),

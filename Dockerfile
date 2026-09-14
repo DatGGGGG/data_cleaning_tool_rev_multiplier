@@ -12,6 +12,9 @@ RUN pnpm install --frozen-lockfile
 
 FROM base AS builder
 
+ARG NEXT_PUBLIC_BASE_PATH
+ENV NEXT_PUBLIC_BASE_PATH=$NEXT_PUBLIC_BASE_PATH
+
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 

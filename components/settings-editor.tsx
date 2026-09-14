@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { appApiPath } from "@/lib/app-path";
 import type { BottomUpProductionSource, PublicAppSettings } from "@/lib/app-settings/server";
 
 type SettingsEditorProps = {
@@ -33,7 +34,7 @@ export function SettingsEditor({ initialSettings }: SettingsEditorProps) {
   async function saveSettings() {
     setIsSaving(true);
     try {
-      const response = await fetch("/api/settings", {
+      const response = await fetch(appApiPath("/api/settings"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

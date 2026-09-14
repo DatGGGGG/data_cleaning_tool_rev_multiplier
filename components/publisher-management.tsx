@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { appApiPath } from "@/lib/app-path";
 import type { PublisherOverviewRow, TopDownOverviewState } from "@/lib/top-down/types";
 
 type PublisherManagementProps = {
@@ -68,7 +69,7 @@ export function PublisherManagement({ initialState }: PublisherManagementProps) 
     setIsBusy(true);
     try {
       const response = await fetch(
-        `/api/top-down/overview?operatorName=${encodeURIComponent(operatorName)}`,
+        appApiPath(`/api/top-down/overview?operatorName=${encodeURIComponent(operatorName)}`),
         { cache: "no-store" },
       );
       const payload = await parseResponse(response);
@@ -81,7 +82,7 @@ export function PublisherManagement({ initialState }: PublisherManagementProps) 
   }
 
   async function postOverview(body: Record<string, string>, message: string) {
-    const response = await fetch("/api/top-down/overview", {
+    const response = await fetch(appApiPath("/api/top-down/overview"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ operatorName, ...body }),

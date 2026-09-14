@@ -111,6 +111,61 @@ If this returns `200`, the app is running and Chrome cache/redirect behavior is 
 - Manual endpoint: `POST /api/top-down/sensortower/full-refresh`
 - Optional protection: set `SENSORTOWER_REFRESH_TOKEN` and send it as `x-refresh-token`
 
+## Deploy to the company VM
+
+The repository includes a production Docker image and Compose service. The service is isolated from the existing VM
+containers and stores its state in the named Docker volume `sensortower_cleaning_storage`.
+
+On the VM:
+
+```bash
+git clone https://git.ved.vn/tiendat.nguyen/vn-market-data-system-data-cleaning-tool-sensortower.git
+cd vn-market-data-system-data-cleaning-tool-sensortower
+cp .env.production.example .env.production
+```
+
+Edit `.env.production` with the real `ST_API_KEY`, `STRATEGY_DATA_API_KEY`, and a private
+`SENSORTOWER_REFRESH_TOKEN`. Confirm `STRATEGY_DATA_API_BASE_URL` points to the production VN Strategy API. The
+provided default uses `host.docker.internal:8001`, matching the VM port currently used by that API.
+
+Build and start the service:
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs -f sensortower-cleaning-workbench
+```
+
+The default URL is `http://<vm-host-or-ip>:3015`. Use another port only when needed:
+
+```bash
+WORKBENCH_PORT=3015 docker compose up -d --build
+```
+
+To update after a later Git push:
+
+```bash
+git pull --ff-only origin main
+docker compose up -d --build
+```
+
+### Migrating existing local workbench data
+
+`storage/` is intentionally excluded from Git because it can contain working mappings, uploaded files, exports,
+and API configuration. To preserve the current local workbench, transfer the entire local `storage` directory to a
+temporary directory on the VM, stop the service, then copy it into the named volume before starting again:
+
+```bash
+docker compose down
+docker run --rm \
+  -v sensortower_cleaning_storage:/target \
+  -v "$(pwd)/storage-transfer:/source:ro" \
+  alpine sh -c 'cp -a /source/. /target/'
+docker compose up -d
+```
+
+Keep `.env.production` and the Docker volume backed up. Neither is restored by `git pull`.
+
 ## Next implementation steps
 
 - replace the local JSON datastore with shared database persistence

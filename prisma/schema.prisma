@@ -1,0 +1,103 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Dataset {
+  id            String           @id @default(cuid())
+  kind          String
+  slug          String           @unique
+  name          String
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  publisherSheets PublisherSheet[]
+  versions      DatasetVersion[]
+  artifacts     StoredArtifact[]
+  auditLogs     AuditLog[]
+}
+
+model PublisherSheet {
+  id            String         @id @default(cuid())
+  datasetId     String
+  key           String
+  name          String
+  sortOrder     Int
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  dataset       Dataset        @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  rows          DatasetRow[]
+  artifacts     StoredArtifact[]
+
+  @@unique([datasetId, key])
+  @@index([datasetId, sortOrder])
+}
+
+model DatasetRow {
+  id                   String         @id @default(cuid())
+  publisherSheetId     String
+  publisherName        String?
+  ordinal              Int
+  gameName             String?
+  sensorTowerLink      String?
+  iosAppId             String?
+  iosStoreAccount      String?
+  androidAppId         String?
+  androidStoreAccount  String?
+  addingDate           String?
+  adder                String?
+  reviewStatus         String
+  notes                String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  updatedBy            String?
+  publisherSheet       PublisherSheet @relation(fields: [publisherSheetId], references: [id], onDelete: Cascade)
+
+  @@index([publisherSheetId, ordinal])
+}
+
+model DatasetVersion {
+  id             String   @id @default(cuid())
+  datasetId      String
+  label          String
+  status         String   @default("draft")
+  snapshotJson   String
+  createdAt      DateTime @default(now())
+  createdBy      String?
+  dataset        Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@index([datasetId, createdAt])
+}
+
+model StoredArtifact {
+  id             String    @id @default(cuid())
+  datasetId      String
+  publisherSheetId String?
+  kind           String
+  originalName   String
+  storagePath    String
+  mimeType       String
+  createdAt      DateTime  @default(now())
+  createdBy      String?
+  dataset        Dataset   @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  publisherSheet PublisherSheet? @relation(fields: [publisherSheetId], references: [id], onDelete: SetNull)
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  datasetId      String
+  actor          String?
+  action         String
+  targetType     String
+  targetId       String
+  beforeJson     String?
+  afterJson      String?
+  detail         String?
+  createdAt      DateTime @default(now())
+  dataset        Dataset   @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@index([datasetId, createdAt])
+}

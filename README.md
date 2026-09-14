@@ -143,9 +143,10 @@ available publicly through the gateway at:
 https://market-data.garena.vn/cleaning/sensortower/
 ```
 
-The application image is built with that path as its Next.js base path. Keep
-the trailing slash when opening it directly. Port `3015` remains available on
-the VM for local troubleshooting only. Use another port only when needed:
+The application image is built with that path as its Next.js base path. Next.js
+redirects the trailing-slash URL to its canonical equivalent; both work. Port
+`3015` remains available on the VM for local troubleshooting only. Use another
+port only when needed:
 
 ```bash
 WORKBENCH_PORT=3015 docker compose up -d --build

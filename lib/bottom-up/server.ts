@@ -8,6 +8,7 @@ import type {
   BottomUpActivityLogEntry,
   BottomUpAppCandidate,
   BottomUpPublisherCandidate,
+  BottomUpProductionLoadSummary,
   BottomUpProductionSyncState,
   BottomUpRowDraft,
   BottomUpStep1FilterRule,
@@ -32,6 +33,10 @@ const IMPORTS_DIR = path.join(STORAGE_ROOT, "imports");
 const EXPORTS_DIR = path.join(STORAGE_ROOT, "exports");
 const STORE_PATH = path.join(STORAGE_ROOT, "bottom-up-workbench.json");
 const STORE_TEMP_PATH = path.join(STORAGE_ROOT, "bottom-up-workbench.json.tmp");
+const JOBS_DIR = path.join(STORAGE_ROOT, "jobs");
+const PRODUCTION_SYNC_STATE_PATH = path.join(JOBS_DIR, "bottom-up-production-sync.json");
+const PRODUCTION_SYNC_STATE_TEMP_PATH = path.join(JOBS_DIR, "bottom-up-production-sync.json.tmp");
+const PRODUCTION_SYNC_JOBS_DIR = path.join(JOBS_DIR, "bottom-up-production");
 const MAX_PUBLISHER_HOVER_APPS = 30;
 const LOCAL_MANUAL_SEED_PATH =
   process.env.BOTTOM_UP_SEED_CSV ||
@@ -48,6 +53,10 @@ declare global {
   var __bottomUpStoreWritePromise: Promise<void> | undefined;
   // eslint-disable-next-line no-var
   var __bottomUpProductionSyncPromise: Promise<void> | undefined;
+  // eslint-disable-next-line no-var
+  var __bottomUpProductionSyncStateWritePromise: Promise<void> | undefined;
+  // eslint-disable-next-line no-var
+  var __bottomUpStoreMutationPromise: Promise<void> | undefined;
 }
 
 type PersistedVersion = BottomUpVersionSnapshot & {
@@ -114,6 +123,18 @@ type ProductionReadSettings = {
   appFullInfoCurrentNdjson: string;
 };
 
+type ProductionCheckpointPage = {
+  offset: number;
+  rows: ProductionAppFullInfoRecord[];
+};
+
+type ProductionCheckpointContext = {
+  jobId: string;
+  nextOffset: number;
+  checkpointDirectory: string;
+  update: (progress: ProductionProgress, nextOffset: number) => Promise<void>;
+};
+
 type ProductionProgress = Pick<
   BottomUpProductionSyncState,
   "stage" | "pagesRead" | "scannedRecords" | "expectedRecordCount" | "sourceType"
@@ -171,6 +192,8 @@ function createLog(
 async function ensureStorageDirectories() {
   await fs.mkdir(IMPORTS_DIR, { recursive: true });
   await fs.mkdir(EXPORTS_DIR, { recursive: true });
+  await fs.mkdir(JOBS_DIR, { recursive: true });
+  await fs.mkdir(PRODUCTION_SYNC_JOBS_DIR, { recursive: true });
 }
 
 async function readSeedRows() {
@@ -223,13 +246,52 @@ function normalizeProductionSyncState(value: unknown): BottomUpProductionSyncSta
 
   const candidate = value as Partial<BottomUpProductionSyncState>;
   const status =
-    candidate.status === "running" || candidate.status === "succeeded" || candidate.status === "failed"
+    candidate.status === "queued" || candidate.status === "running" || candidate.status === "succeeded" || candidate.status === "failed"
       ? candidate.status
       : "idle";
   const normalizedNumber = (input: unknown) => {
     const numeric = Number(input);
     return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0;
   };
+
+  const summary =
+    candidate.summary && typeof candidate.summary === "object"
+      ? {
+          candidateRows: normalizedNumber(candidate.summary.candidateRows),
+          replacedCount: normalizedNumber(candidate.summary.replacedCount),
+          insertedCount: normalizedNumber(candidate.summary.insertedCount),
+          needsReviewCount: normalizedNumber(candidate.summary.needsReviewCount),
+        }
+      : undefined;
+  const lastSuccessfulLoad: BottomUpProductionLoadSummary | undefined =
+    candidate.lastSuccessfulLoad && typeof candidate.lastSuccessfulLoad === "object"
+      ? {
+          completedAt: normalizeText(candidate.lastSuccessfulLoad.completedAt),
+          sourceType:
+            candidate.lastSuccessfulLoad.sourceType === "api" || candidate.lastSuccessfulLoad.sourceType === "file"
+              ? candidate.lastSuccessfulLoad.sourceType
+              : ("" as const),
+          scannedRecords: normalizedNumber(candidate.lastSuccessfulLoad.scannedRecords),
+          relatedAppRecords: normalizedNumber(candidate.lastSuccessfulLoad.relatedAppRecords),
+          candidateRows: normalizedNumber(candidate.lastSuccessfulLoad.candidateRows),
+          publisherCandidateCount: normalizedNumber(candidate.lastSuccessfulLoad.publisherCandidateCount),
+          replacedCount: normalizedNumber(candidate.lastSuccessfulLoad.replacedCount),
+          insertedCount: normalizedNumber(candidate.lastSuccessfulLoad.insertedCount),
+          needsReviewCount: normalizedNumber(candidate.lastSuccessfulLoad.needsReviewCount),
+        }
+      : status === "succeeded" && normalizeText(candidate.completedAt)
+        ? {
+            completedAt: normalizeText(candidate.completedAt),
+            sourceType: candidate.sourceType === "api" || candidate.sourceType === "file" ? candidate.sourceType : ("" as const),
+            scannedRecords: normalizedNumber(candidate.scannedRecords),
+            relatedAppRecords: 0,
+            candidateRows: normalizedNumber(candidate.summary?.candidateRows),
+            publisherCandidateCount: 0,
+            replacedCount: normalizedNumber(candidate.summary?.replacedCount),
+            insertedCount: normalizedNumber(candidate.summary?.insertedCount),
+            needsReviewCount: normalizedNumber(candidate.summary?.needsReviewCount),
+          }
+        : undefined;
 
   return {
     status,
@@ -242,15 +304,11 @@ function normalizeProductionSyncState(value: unknown): BottomUpProductionSyncSta
     scannedRecords: normalizedNumber(candidate.scannedRecords),
     expectedRecordCount: normalizedNumber(candidate.expectedRecordCount),
     sourceType: candidate.sourceType === "api" || candidate.sourceType === "file" ? candidate.sourceType : "",
-    summary:
-      candidate.summary && typeof candidate.summary === "object"
-        ? {
-            candidateRows: normalizedNumber(candidate.summary.candidateRows),
-            replacedCount: normalizedNumber(candidate.summary.replacedCount),
-            insertedCount: normalizedNumber(candidate.summary.insertedCount),
-            needsReviewCount: normalizedNumber(candidate.summary.needsReviewCount),
-          }
-        : undefined,
+    jobId: normalizeText(candidate.jobId),
+    nextOffset: normalizedNumber(candidate.nextOffset),
+    heartbeatAt: normalizeText(candidate.heartbeatAt),
+    lastSuccessfulLoad,
+    summary,
   };
 }
 
@@ -470,21 +528,6 @@ async function readStore(): Promise<PersistedStore> {
     try {
       const parsed = JSON.parse(raw) as unknown;
       const store = normalizeStore(parsed);
-      if (store.productionSync.status === "running" && !globalThis.__bottomUpProductionSyncPromise) {
-        const interruptedAt = nowIso();
-        store.productionSync = {
-          ...store.productionSync,
-          status: "failed",
-          stage: "Interrupted",
-          message: "The production load was interrupted by a workbench restart. Start it again when ready.",
-          updatedAt: interruptedAt,
-          completedAt: interruptedAt,
-        };
-        appendLogs(store, [
-          createLog("production_sync_interrupted", "system", "dataset", DATASET_ID, store.productionSync.message),
-        ]);
-        await writeStore(store);
-      }
       const parsedStore = parsed as Partial<PersistedStore>;
       const parsedRowCount = Array.isArray(parsedStore.rows) ? parsedStore.rows.length : store.rows.length;
       const parsedCandidateCount = Array.isArray(parsedStore.appCandidates)
@@ -535,6 +578,91 @@ async function writeStore(store: PersistedStore) {
 
   globalThis.__bottomUpStoreWritePromise = nextWrite.catch(() => undefined);
   await nextWrite;
+}
+
+async function writeProductionSyncState(state: BottomUpProductionSyncState) {
+  await ensureStorageDirectories();
+  const payload = JSON.stringify(state, null, 2);
+  const previousWrite = globalThis.__bottomUpProductionSyncStateWritePromise ?? Promise.resolve();
+  const nextWrite = previousWrite.then(async () => {
+    await fs.writeFile(PRODUCTION_SYNC_STATE_TEMP_PATH, payload, "utf-8");
+    await fs.rename(PRODUCTION_SYNC_STATE_TEMP_PATH, PRODUCTION_SYNC_STATE_PATH);
+  });
+  globalThis.__bottomUpProductionSyncStateWritePromise = nextWrite.catch(() => undefined);
+  await nextWrite;
+}
+
+function getLegacyLastSuccessfulLoad(store: PersistedStore): BottomUpProductionLoadSummary | undefined {
+  if (store.productionSync.lastSuccessfulLoad) {
+    return store.productionSync.lastSuccessfulLoad;
+  }
+  if (store.productionSync.status === "succeeded" && store.productionSync.completedAt) {
+    return {
+      completedAt: store.productionSync.completedAt,
+      sourceType: store.productionSync.sourceType,
+      scannedRecords: store.productionSync.scannedRecords,
+      relatedAppRecords: 0,
+      candidateRows: store.productionSync.summary?.candidateRows ?? 0,
+      publisherCandidateCount: store.publisherCandidateCount,
+      replacedCount: store.productionSync.summary?.replacedCount ?? 0,
+      insertedCount: store.productionSync.summary?.insertedCount ?? 0,
+      needsReviewCount: store.productionSync.summary?.needsReviewCount ?? 0,
+    };
+  }
+  const completed = store.logs.find((entry) => entry.action === "sync_bottom_up_from_production");
+  return completed
+    ? {
+        completedAt: completed.createdAt,
+        sourceType: "",
+        scannedRecords: 0,
+        relatedAppRecords: 0,
+        candidateRows: 0,
+        publisherCandidateCount: store.publisherCandidateCount,
+        replacedCount: 0,
+        insertedCount: 0,
+        needsReviewCount: store.rows.filter((row) => row.reviewStatus === "needs_review").length,
+      }
+    : undefined;
+}
+
+async function readProductionSyncState(store?: PersistedStore): Promise<BottomUpProductionSyncState> {
+  await ensureStorageDirectories();
+  try {
+    const state = normalizeProductionSyncState(JSON.parse(await fs.readFile(PRODUCTION_SYNC_STATE_PATH, "utf-8")) as unknown);
+    return state;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const legacyStore = store ?? (await readStore());
+  const legacyState = normalizeProductionSyncState(legacyStore.productionSync);
+  const migrated: BottomUpProductionSyncState = {
+    ...legacyState,
+    // An in-memory promise cannot prove that the job failed. Queue it for a safe resume instead.
+    status: legacyState.status === "running" ? "queued" : legacyState.status,
+    stage: legacyState.status === "running" ? "Waiting to resume production load" : legacyState.stage,
+    message:
+      legacyState.status === "running"
+        ? "A production load was in progress when the workbench restarted. It will resume from its saved checkpoint."
+        : legacyState.message,
+    lastSuccessfulLoad: getLegacyLastSuccessfulLoad(legacyStore),
+  };
+  await writeProductionSyncState(migrated);
+  return migrated;
+}
+
+async function mutateStore<T>(mutator: (store: PersistedStore) => Promise<T> | T): Promise<T> {
+  const previous = globalThis.__bottomUpStoreMutationPromise ?? Promise.resolve();
+  const next = previous.then(async () => {
+    const store = await readStore();
+    const result = await mutator(store);
+    await writeStore(store);
+    return result;
+  });
+  globalThis.__bottomUpStoreMutationPromise = next.then(() => undefined, () => undefined);
+  return next;
 }
 
 function appendLogs(store: PersistedStore, logs: BottomUpActivityLogEntry[]) {
@@ -775,7 +903,10 @@ async function readManualReferenceRows() {
   }
 }
 
-async function readProductionPublisherCandidates(reportProgress?: ProductionProgressReporter) {
+async function readProductionPublisherCandidates(
+  reportProgress?: ProductionProgressReporter,
+  checkpoint?: ProductionCheckpointContext,
+) {
   const settings = await getEffectiveAppSettings();
   const source = settings.bottomUpProductionSource;
   const hasApiSettings = Boolean(settings.strategyDataApiBaseUrl && settings.strategyDataApiKey);
@@ -784,11 +915,11 @@ async function readProductionPublisherCandidates(reportProgress?: ProductionProg
     if (!hasApiSettings) {
       throw new Error("Production source is set to API only, but the Strategy Data API URL or API key is missing in Settings.");
     }
-    return readProductionPublisherCandidatesFromApi(settings, reportProgress);
+    return readProductionPublisherCandidatesFromApi(settings, reportProgress, checkpoint);
   }
 
   if (source === "auto" && hasApiSettings) {
-    return readProductionPublisherCandidatesFromApi(settings, reportProgress);
+    return readProductionPublisherCandidatesFromApi(settings, reportProgress, checkpoint);
   }
 
   return readProductionPublisherCandidatesFromFile(settings, reportProgress);
@@ -841,12 +972,46 @@ const PRODUCTION_APP_FULL_INFO_WHERE = `
 async function readProductionPublisherCandidatesFromApi(
   settings: ProductionReadSettings,
   reportProgress?: ProductionProgressReporter,
+  checkpoint?: ProductionCheckpointContext,
 ) {
   const candidates = new Map<string, ProductionPublisherCandidate>();
   const appCandidates: BottomUpAppCandidate[] = [];
   let scannedRecords = 0;
-  let offset = 0;
+  let offset = checkpoint?.nextOffset ?? 0;
   let pagesRead = 0;
+
+  if (checkpoint) {
+    const cachedPages = await readProductionCheckpointPages(checkpoint.checkpointDirectory);
+    const contiguousPages: ProductionCheckpointPage[] = [];
+    let contiguousOffset = 0;
+    for (const page of cachedPages) {
+      if (page.offset !== contiguousOffset) {
+        break;
+      }
+      contiguousPages.push(page);
+      contiguousOffset += page.rows.length;
+      if (page.rows.length < settings.strategyDataApiPageSize) {
+        break;
+      }
+    }
+    // The saved offset is trusted only when every preceding page exists. Otherwise resume from the safe prefix.
+    offset = Math.min(offset, contiguousOffset);
+    for (const page of contiguousPages.filter((page) => page.offset < offset)) {
+      for (const record of page.rows) {
+        const publisherId = normalizeText(record.publisher_id);
+        const publisherName = normalizeText(record.publisher_name);
+        if (!publisherId || !publisherName) {
+          continue;
+        }
+        appCandidates.push(createAppCandidate(record, appCandidates.length));
+        if (!candidates.has(publisherId)) {
+          candidates.set(publisherId, { publisherId, publisherName });
+        }
+      }
+      scannedRecords += page.rows.length;
+      pagesRead += 1;
+    }
+  }
 
   await reportProgress?.({
     stage: "Counting VN-related App Full Info rows",
@@ -879,6 +1044,9 @@ async function readProductionPublisherCandidatesFromApi(
       OFFSET ${offset}
     `;
     const rows = await queryStrategyDataApi(sql, settings);
+    if (checkpoint) {
+      await writeProductionCheckpointPage(checkpoint.checkpointDirectory, offset, rows);
+    }
     scannedRecords += rows.length;
     pagesRead += 1;
 
@@ -895,18 +1063,19 @@ async function readProductionPublisherCandidatesFromApi(
       }
     }
 
+    const progress = {
+      stage: "Reading App Full Info pages",
+      pagesRead,
+      scannedRecords,
+      expectedRecordCount,
+      sourceType: "api" as const,
+    };
+    const nextOffset = offset + rows.length;
+    await reportProgress?.(progress);
+    await checkpoint?.update(progress, nextOffset);
+
     if (rows.length < settings.strategyDataApiPageSize) {
       break;
-    }
-
-    if (pagesRead % 3 === 0) {
-      await reportProgress?.({
-        stage: "Reading App Full Info pages",
-        pagesRead,
-        scannedRecords,
-        expectedRecordCount,
-        sourceType: "api",
-      });
     }
 
     offset += settings.strategyDataApiPageSize;
@@ -929,6 +1098,39 @@ async function readProductionPublisherCandidatesFromApi(
     invalidJsonRecords: 0,
     relatedAppRecords: appCandidates.length,
   };
+}
+
+function checkpointPagePath(directory: string, offset: number) {
+  return path.join(directory, `page-${String(offset).padStart(12, "0")}.json`);
+}
+
+async function writeProductionCheckpointPage(directory: string, offset: number, rows: ProductionAppFullInfoRecord[]) {
+  await fs.mkdir(directory, { recursive: true });
+  const targetPath = checkpointPagePath(directory, offset);
+  const temporaryPath = `${targetPath}.tmp`;
+  const payload: ProductionCheckpointPage = { offset, rows };
+  await fs.writeFile(temporaryPath, JSON.stringify(payload), "utf-8");
+  await fs.rename(temporaryPath, targetPath);
+}
+
+async function readProductionCheckpointPages(directory: string): Promise<ProductionCheckpointPage[]> {
+  try {
+    const names = (await fs.readdir(directory)).filter((name) => /^page-\d+\.json$/.test(name)).sort();
+    const pages: ProductionCheckpointPage[] = [];
+    for (const name of names) {
+      const page = JSON.parse(await fs.readFile(path.join(directory, name), "utf-8")) as Partial<ProductionCheckpointPage>;
+      if (typeof page.offset !== "number" || !Array.isArray(page.rows)) {
+        continue;
+      }
+      pages.push({ offset: page.offset, rows: page.rows as ProductionAppFullInfoRecord[] });
+    }
+    return pages.sort((left, right) => left.offset - right.offset);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
 }
 
 async function readProductionPublisherCandidatesFromFile(
@@ -1305,7 +1507,8 @@ export async function updateBottomUpStep1Checked(params: {
 
 export async function getBottomUpWorkbenchState(operatorName = "Local operator") {
   const store = await readStore();
-  return makeWorkbenchState(store, operatorName);
+  const productionSync = await getBottomUpProductionSyncState();
+  return { ...makeWorkbenchState(store, operatorName), productionSync };
 }
 
 export async function saveBottomUpRows(
@@ -1313,18 +1516,18 @@ export async function saveBottomUpRows(
   operatorName: string,
   checkedPublisherNames?: string[],
 ) {
-  const store = await readStore();
-  store.rows = rows.map((row, index) => normalizeBottomUpRow(row, index + 1));
-  if (checkedPublisherNames) {
-    store.checkedPublisherNames = [...new Set(checkedPublisherNames.map(normalizeText).filter(Boolean))].sort(
-      (left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }),
-    );
-  }
-  appendLogs(store, [
-    createLog("save_bottom_up_rows", operatorName, "dataset", DATASET_ID, `Saved ${store.rows.length} bottom-up rows.`),
-  ]);
-  await writeStore(store);
-  return makeWorkbenchState(store, operatorName);
+  return mutateStore((store) => {
+    store.rows = rows.map((row, index) => normalizeBottomUpRow(row, index + 1));
+    if (checkedPublisherNames) {
+      store.checkedPublisherNames = [...new Set(checkedPublisherNames.map(normalizeText).filter(Boolean))].sort(
+        (left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }),
+      );
+    }
+    appendLogs(store, [
+      createLog("save_bottom_up_rows", operatorName, "dataset", DATASET_ID, `Saved ${store.rows.length} bottom-up rows.`),
+    ]);
+    return makeWorkbenchState(store, operatorName);
+  });
 }
 
 export async function importBottomUpCsvFile(fileName: string, mimeType: string, bytes: Uint8Array, operatorName: string) {
@@ -1359,37 +1562,29 @@ export async function importBottomUpCsvFile(fileName: string, mimeType: string, 
   return makeWorkbenchState(store, operatorName);
 }
 
-async function updateProductionSyncProgress(progress: ProductionProgress) {
-  const previousWrite = globalThis.__bottomUpStoreWritePromise;
-  if (previousWrite) {
-    await previousWrite;
-  }
-
-  const store = await readStore();
-  if (store.productionSync.status !== "running") {
-    return;
-  }
-
-  store.productionSync = {
-    ...store.productionSync,
+async function updateProductionSyncProgress(
+  sync: BottomUpProductionSyncState,
+  progress: ProductionProgress,
+  nextOffset = sync.nextOffset ?? 0,
+) {
+  const updated: BottomUpProductionSyncState = {
+    ...sync,
     ...progress,
+    status: "running",
+    nextOffset,
+    heartbeatAt: nowIso(),
     updatedAt: nowIso(),
   };
-  await writeStore(store);
+  await writeProductionSyncState(updated);
+  return updated;
 }
 
 async function markProductionSyncStarted(operatorName: string) {
-  const previousWrite = globalThis.__bottomUpStoreWritePromise;
-  if (previousWrite) {
-    await previousWrite;
-  }
-
-  const store = await readStore();
   const startedAt = nowIso();
-  store.productionSync = {
-    status: "running",
-    stage: "Preparing production App Full Info load",
-    message: "The production load is running. You can leave this page; progress will remain available.",
+  const state: BottomUpProductionSyncState = {
+    status: "queued",
+    stage: "Queued",
+    message: "Production load is queued and will continue even if you leave this page.",
     startedAt,
     updatedAt: startedAt,
     completedAt: "",
@@ -1397,128 +1592,204 @@ async function markProductionSyncStarted(operatorName: string) {
     scannedRecords: 0,
     expectedRecordCount: 0,
     sourceType: "",
+    jobId: createEntityId("production_sync"),
+    nextOffset: 0,
+    heartbeatAt: startedAt,
+    lastSuccessfulLoad: (await readProductionSyncState(await readStore())).lastSuccessfulLoad,
   };
-  appendLogs(store, [
-    createLog("sync_bottom_up_from_production_started", operatorName, "dataset", DATASET_ID, "Started production App Full Info load."),
-  ]);
-  await writeStore(store);
-  return store.productionSync;
+  await fs.mkdir(path.join(PRODUCTION_SYNC_JOBS_DIR, state.jobId!), { recursive: true });
+  await writeProductionSyncState(state);
+  await mutateStore((store) => {
+    appendLogs(store, [
+      createLog("sync_bottom_up_from_production_started", operatorName, "dataset", DATASET_ID, "Started production App Full Info load."),
+    ]);
+  });
+  return state;
 }
 
-async function markProductionSyncFailed(error: unknown) {
-  const previousWrite = globalThis.__bottomUpStoreWritePromise;
-  if (previousWrite) {
-    await previousWrite;
-  }
-
-  const store = await readStore();
+async function markProductionSyncFailed(sync: BottomUpProductionSyncState, error: unknown) {
   const completedAt = nowIso();
   const detail = error instanceof Error ? error.message : "Failed to load App Full Info from production.";
-  store.productionSync = {
-    ...store.productionSync,
+  const failed: BottomUpProductionSyncState = {
+    ...sync,
     status: "failed",
     stage: "Failed",
     message: detail,
     updatedAt: completedAt,
     completedAt,
+    heartbeatAt: completedAt,
   };
-  appendLogs(store, [
-    createLog("sync_bottom_up_from_production_failed", "system", "dataset", DATASET_ID, detail),
-  ]);
-  await writeStore(store);
+  await writeProductionSyncState(failed);
+  await mutateStore((store) => {
+    appendLogs(store, [createLog("sync_bottom_up_from_production_failed", "system", "dataset", DATASET_ID, detail)]);
+  });
 }
 
-async function runBottomUpProductionSync(operatorName: string) {
-  const manualReferenceRows = await readManualReferenceRows();
-  const production = await readProductionPublisherCandidates(updateProductionSyncProgress);
-  const store = await readStore();
-  const references = buildReferenceLookups([...manualReferenceRows, ...store.rows]);
-  const productionRows = production.candidates
-    .map((candidate, index) => createRowFromProductionCandidate(candidate, index + 1, references))
-    .filter((row) => row.cleanedPublisherName);
-  const cleanedExistingRows = store.rows.filter(shouldKeepBottomUpRow);
-  const mergeResult = upsertRowsByPublisherId(cleanedExistingRows, productionRows);
+async function runBottomUpProductionSync(operatorName: string, requestedJobId?: string) {
+  let sync = await readProductionSyncState(await readStore());
+  if (!sync.jobId || (requestedJobId && sync.jobId !== requestedJobId)) {
+    return undefined;
+  }
+  sync = await updateProductionSyncProgress(sync, {
+    stage: sync.nextOffset ? "Resuming production App Full Info load" : "Preparing production App Full Info load",
+    pagesRead: sync.pagesRead,
+    scannedRecords: sync.scannedRecords,
+    expectedRecordCount: sync.expectedRecordCount,
+    sourceType: sync.sourceType,
+  });
 
-  store.rows = mergeResult.rows;
-  store.appCandidates = production.appCandidates.slice(0, MAX_APP_CANDIDATE_PREVIEW_COUNT);
-  store.appCandidateCount = production.appCandidates.length;
-  store.publisherCandidates = buildPublisherCandidates(production.appCandidates);
-  store.publisherCandidateCount = store.publisherCandidates.length;
-  const needsReviewCount = store.rows.filter((row) => row.reviewStatus === "needs_review").length;
-  const summary: ProductionSyncSummary = {
-    sourcePath: production.sourcePath,
-    sourceType: production.sourceType,
-    scannedRecords: production.scannedRecords,
-    invalidJsonRecords: production.invalidJsonRecords,
-    relatedAppRecords: production.relatedAppRecords,
-    candidateRows: productionRows.length,
-    replacedCount: mergeResult.replacedCount,
-    insertedCount: mergeResult.insertedCount,
-    needsReviewCount,
-  };
-  const completedAt = nowIso();
-  store.productionSync = {
-    ...store.productionSync,
-    status: "succeeded",
-    stage: "Completed",
-    message: `Loaded ${summary.candidateRows} publisher candidates from production App Full Info.`,
-    updatedAt: completedAt,
-    completedAt,
-    pagesRead: store.productionSync.pagesRead,
-    scannedRecords: summary.scannedRecords,
-    expectedRecordCount: store.productionSync.expectedRecordCount || summary.scannedRecords,
-    sourceType: summary.sourceType,
-    summary: {
-      candidateRows: summary.candidateRows,
-      replacedCount: summary.replacedCount,
-      insertedCount: summary.insertedCount,
-      needsReviewCount: summary.needsReviewCount,
+  const jobId = sync.jobId!;
+  const checkpointDirectory = path.join(PRODUCTION_SYNC_JOBS_DIR, jobId);
+  const checkpoint: ProductionCheckpointContext = {
+    jobId,
+    nextOffset: sync.nextOffset ?? 0,
+    checkpointDirectory,
+    update: async (progress, nextOffset) => {
+      const current = await readProductionSyncState();
+      if (current.jobId !== jobId) {
+        throw new Error("Production load was superseded by a newer request.");
+      }
+      sync = await updateProductionSyncProgress(current, progress, nextOffset);
     },
   };
 
-  appendLogs(store, [
-    createLog(
-      "sync_bottom_up_from_production",
-      operatorName,
-      "dataset",
-      DATASET_ID,
-      `Synced ${summary.candidateRows} publisher candidates from production App Full Info (${summary.replacedCount} replaced, ${summary.insertedCount} inserted).`,
-    ),
-  ]);
-  await writeStore(store);
-  return { state: makeWorkbenchState(store, operatorName), summary };
+  const manualReferenceRows = await readManualReferenceRows();
+  const production = await readProductionPublisherCandidates(
+    async (progress) => {
+      sync = await updateProductionSyncProgress(sync, progress);
+    },
+    checkpoint,
+  );
+
+  const result = await mutateStore((store) => {
+    const references = buildReferenceLookups([...manualReferenceRows, ...store.rows]);
+    const productionRows = production.candidates
+      .map((candidate, index) => createRowFromProductionCandidate(candidate, index + 1, references))
+      .filter((row) => row.cleanedPublisherName);
+    const cleanedExistingRows = store.rows.filter(shouldKeepBottomUpRow);
+    const mergeResult = upsertRowsByPublisherId(cleanedExistingRows, productionRows);
+
+    store.rows = mergeResult.rows;
+    store.appCandidates = production.appCandidates.slice(0, MAX_APP_CANDIDATE_PREVIEW_COUNT);
+    store.appCandidateCount = production.appCandidates.length;
+    store.publisherCandidates = buildPublisherCandidates(production.appCandidates);
+    store.publisherCandidateCount = store.publisherCandidates.length;
+    const needsReviewCount = store.rows.filter((row) => row.reviewStatus === "needs_review").length;
+    const summary: ProductionSyncSummary = {
+      sourcePath: production.sourcePath,
+      sourceType: production.sourceType,
+      scannedRecords: production.scannedRecords,
+      invalidJsonRecords: production.invalidJsonRecords,
+      relatedAppRecords: production.relatedAppRecords,
+      candidateRows: productionRows.length,
+      replacedCount: mergeResult.replacedCount,
+      insertedCount: mergeResult.insertedCount,
+      needsReviewCount,
+    };
+    appendLogs(store, [
+      createLog(
+        "sync_bottom_up_from_production",
+        operatorName,
+        "dataset",
+        DATASET_ID,
+        `Synced ${summary.candidateRows} publisher candidates from production App Full Info (${summary.replacedCount} replaced, ${summary.insertedCount} inserted).`,
+      ),
+    ]);
+    return { state: makeWorkbenchState(store, operatorName), summary, publisherCandidateCount: store.publisherCandidateCount };
+  });
+
+  const completedAt = nowIso();
+  const succeeded: BottomUpProductionSyncState = {
+    ...sync,
+    status: "succeeded",
+    stage: "Completed",
+    message: `Loaded ${result.summary.candidateRows} publisher candidates from production App Full Info.`,
+    updatedAt: completedAt,
+    completedAt,
+    heartbeatAt: completedAt,
+    scannedRecords: result.summary.scannedRecords,
+    expectedRecordCount: sync.expectedRecordCount || result.summary.scannedRecords,
+    sourceType: result.summary.sourceType,
+    summary: {
+      candidateRows: result.summary.candidateRows,
+      replacedCount: result.summary.replacedCount,
+      insertedCount: result.summary.insertedCount,
+      needsReviewCount: result.summary.needsReviewCount,
+    },
+    lastSuccessfulLoad: {
+      completedAt,
+      sourceType: result.summary.sourceType,
+      scannedRecords: result.summary.scannedRecords,
+      relatedAppRecords: result.summary.relatedAppRecords,
+      candidateRows: result.summary.candidateRows,
+      publisherCandidateCount: result.publisherCandidateCount,
+      replacedCount: result.summary.replacedCount,
+      insertedCount: result.summary.insertedCount,
+      needsReviewCount: result.summary.needsReviewCount,
+    },
+  };
+  await writeProductionSyncState(succeeded);
+  return { state: { ...result.state, productionSync: succeeded }, summary: result.summary };
 }
 
-export async function getBottomUpProductionSyncState() {
-  return (await readStore()).productionSync;
-}
-
-export async function startBottomUpProductionSync(operatorName: string) {
-  const existing = await getBottomUpProductionSyncState();
-  if (existing.status === "running" && globalThis.__bottomUpProductionSyncPromise) {
-    return { started: false, syncStatus: existing };
+async function ensureBottomUpProductionSyncRunner(operatorName = "system") {
+  const sync = await readProductionSyncState(await readStore());
+  if ((sync.status !== "queued" && sync.status !== "running") || !sync.jobId) {
+    return sync;
+  }
+  if (globalThis.__bottomUpProductionSyncPromise) {
+    return sync;
   }
 
-  const syncStatus = await markProductionSyncStarted(operatorName);
-  const job = runBottomUpProductionSync(operatorName)
-    .catch(async (error) => {
-      await markProductionSyncFailed(error);
-    })
+  const resumed = sync.status === "running"
+    ? {
+        ...sync,
+        status: "queued" as const,
+        stage: "Waiting to resume production load",
+        message: "Resuming production App Full Info from its saved checkpoint.",
+        updatedAt: nowIso(),
+      }
+    : sync;
+  if (resumed !== sync) {
+    await writeProductionSyncState(resumed);
+  }
+  const jobId = resumed.jobId;
+  const job = runBottomUpProductionSync(operatorName, jobId)
+    .catch(async (error) => markProductionSyncFailed(await readProductionSyncState(), error))
     .then(() => undefined)
     .finally(() => {
       globalThis.__bottomUpProductionSyncPromise = undefined;
     });
   globalThis.__bottomUpProductionSyncPromise = job;
+  return resumed;
+}
 
+export async function getBottomUpProductionSyncState() {
+  const state = await readProductionSyncState(await readStore());
+  if ((state.status === "queued" || state.status === "running") && !globalThis.__bottomUpProductionSyncPromise) {
+    return ensureBottomUpProductionSyncRunner();
+  }
+  return state;
+}
+
+export async function startBottomUpProductionSync(operatorName: string) {
+  const existing = await readProductionSyncState(await readStore());
+  if (existing.status === "queued" || existing.status === "running") {
+    await ensureBottomUpProductionSyncRunner(operatorName);
+    return { started: false, syncStatus: await readProductionSyncState() };
+  }
+
+  const syncStatus = await markProductionSyncStarted(operatorName);
+  await ensureBottomUpProductionSyncRunner(operatorName);
   return { started: true, syncStatus };
 }
 
 export async function syncBottomUpFromProduction(operatorName: string) {
-  await markProductionSyncStarted(operatorName);
+  const sync = await markProductionSyncStarted(operatorName);
   try {
-    return await runBottomUpProductionSync(operatorName);
+    return await runBottomUpProductionSync(operatorName, sync.jobId);
   } catch (error) {
-    await markProductionSyncFailed(error);
+    await markProductionSyncFailed(sync, error);
     throw error;
   }
 }

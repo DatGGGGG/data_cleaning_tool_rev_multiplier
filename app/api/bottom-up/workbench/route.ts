@@ -10,7 +10,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const state = await getBottomUpWorkbenchState(getOperatorName(url.searchParams));
-    return NextResponse.json({ state });
+    return NextResponse.json({ state }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to load bottom-up workbench." },
@@ -31,7 +31,7 @@ export async function PUT(request: Request) {
       body.operatorName?.trim() || "Local operator",
       body.checkedPublisherNames,
     );
-    return NextResponse.json({ state });
+    return NextResponse.json({ state }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to save bottom-up workbench." },

@@ -1580,6 +1580,11 @@ textarea {
   background: #eef6ff;
 }
 
+.production-sync-panel-queued {
+  border-color: #88add3;
+  background: #eef6ff;
+}
+
 .production-sync-panel-failed {
   border-color: #e9b9b9;
   background: #fff8f8;

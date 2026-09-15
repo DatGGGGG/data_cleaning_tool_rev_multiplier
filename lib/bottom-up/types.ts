@@ -98,7 +98,19 @@ export type BottomUpActivityLogEntry = {
   createdAt: string;
 };
 
-export type BottomUpProductionSyncStatus = "idle" | "running" | "succeeded" | "failed";
+export type BottomUpProductionSyncStatus = "idle" | "queued" | "running" | "succeeded" | "failed";
+
+export type BottomUpProductionLoadSummary = {
+  completedAt: string;
+  sourceType: "api" | "file" | "";
+  scannedRecords: number;
+  relatedAppRecords: number;
+  candidateRows: number;
+  publisherCandidateCount: number;
+  replacedCount: number;
+  insertedCount: number;
+  needsReviewCount: number;
+};
 
 export type BottomUpProductionSyncState = {
   status: BottomUpProductionSyncStatus;
@@ -111,6 +123,10 @@ export type BottomUpProductionSyncState = {
   scannedRecords: number;
   expectedRecordCount: number;
   sourceType: "api" | "file" | "";
+  jobId?: string;
+  nextOffset?: number;
+  heartbeatAt?: string;
+  lastSuccessfulLoad?: BottomUpProductionLoadSummary;
   summary?: {
     candidateRows: number;
     replacedCount: number;

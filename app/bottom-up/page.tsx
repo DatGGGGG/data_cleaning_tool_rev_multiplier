@@ -25,6 +25,7 @@ export default async function BottomUpPage() {
       scannedRecords: 0,
       expectedRecordCount: 0,
       sourceType: "",
+      nextOffset: 0,
     },
   };
   return (

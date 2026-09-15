@@ -405,10 +405,10 @@ export function BottomUpEditor({
   const latestLogs: BottomUpActivityLogEntry[] = state.logs.slice(0, 6);
   const latestVersions: BottomUpVersionSnapshot[] = state.versions.slice(0, 4);
   const productionSync = state.productionSync;
-  const productionSyncIsRunning = productionSync.status === "running";
+  const productionSyncIsRunning = productionSync.status === "queued" || productionSync.status === "running";
   const lastProductionLoadLabel =
-    productionSync.status === "succeeded" && productionSync.completedAt
-      ? new Date(productionSync.completedAt).toLocaleString()
+    productionSync.lastSuccessfulLoad?.completedAt
+      ? new Date(productionSync.lastSuccessfulLoad.completedAt).toLocaleString()
       : "Never loaded";
   const productionSyncProgress =
     productionSync.expectedRecordCount > 0
@@ -557,7 +557,7 @@ export function BottomUpEditor({
         }
 
         setState((current) => ({ ...current, productionSync: payload.syncStatus as BottomUpProductionSyncState }));
-        if (payload.syncStatus.status !== "running" && completedProductionSyncRef.current !== payload.syncStatus.updatedAt) {
+        if (payload.syncStatus.status !== "queued" && payload.syncStatus.status !== "running" && completedProductionSyncRef.current !== payload.syncStatus.updatedAt) {
           completedProductionSyncRef.current = payload.syncStatus.updatedAt;
           setStatusMessage(payload.syncStatus.message);
           void reloadWorkbench();
@@ -1324,7 +1324,7 @@ export function BottomUpEditor({
                     names, multipliers, status, notes, and audit fields are preserved where possible.
                   </p>
                 </div>
-                {productionSync.status === "running" ? (
+                {productionSync.status === "queued" || productionSync.status === "running" ? (
                   <div className="progress-block" aria-live="polite">
                     <div className="progress-meta">
                       <span>{productionSync.stage}</span>
@@ -1361,7 +1361,15 @@ export function BottomUpEditor({
                   <div className="production-sync-result production-sync-result-error" role="alert">
                     <strong>Last production load failed</strong>
                     <p>{productionSync.message}</p>
-                    <span>{productionSync.completedAt ? new Date(productionSync.completedAt).toLocaleString() : "Failure time unavailable"}</span>
+                    <span>
+                      {productionSync.completedAt ? new Date(productionSync.completedAt).toLocaleString() : "Failure time unavailable"}
+                      {productionSync.lastSuccessfulLoad?.completedAt
+                        ? ` | Published dataset remains from ${new Date(productionSync.lastSuccessfulLoad.completedAt).toLocaleString()}`
+                        : " | No successful production dataset has been recorded yet."}
+                    </span>
+                    <button type="button" className="button button-secondary" onClick={() => void syncFromProduction()} disabled={isBusy}>
+                      Retry load
+                    </button>
                   </div>
                 ) : null}
               </div>

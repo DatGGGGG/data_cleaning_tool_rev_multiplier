@@ -177,6 +177,12 @@ Use **Test App Full Info Connection** before the first Step 0 load. It performs 
 against `core.dim_app_info` and shows a sample app only when the API, key, and table are all available. The API key
 is never returned to the browser after it has been saved.
 
+Step 0 production loads run as a durable server-side job. The workbench saves a small job status record and, for API
+loads, checkpoints each completed API page under `storage/jobs/`. You may leave the page while it runs. If the
+workbench container restarts, the next Bottom Up request resumes the same API load from its most recently saved page;
+the current published dataset is not replaced until the load completes successfully. The Step 0 screen always shows
+the last successful load separately from the latest attempt, including when a later attempt fails.
+
 ### Portal mapping version API
 
 The portal backend can list and download saved mapping snapshots through these read-only endpoints:

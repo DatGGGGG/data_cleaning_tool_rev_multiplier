@@ -1575,9 +1575,14 @@ textarea {
   max-width: 920px;
 }
 
-.production-sync-panel-active {
+.production-sync-panel-running {
   border-color: #88add3;
   background: #eef6ff;
+}
+
+.production-sync-panel-failed {
+  border-color: #e9b9b9;
+  background: #fff8f8;
 }
 
 .progress-block {
@@ -1612,6 +1617,38 @@ textarea {
   display: block;
   height: 100%;
   transition: width 450ms ease;
+}
+
+.determinate-progress-indeterminate span {
+  animation: production-progress 1.5s ease-in-out infinite;
+}
+
+.production-sync-result {
+  border-radius: 12px;
+  max-width: 420px;
+  padding: 10px 12px;
+}
+
+.production-sync-result span {
+  color: var(--text-muted);
+  display: block;
+  font-size: 0.8rem;
+  margin-top: 6px;
+}
+
+.production-sync-result-success {
+  background: #f0f8f3;
+  border: 1px solid #c6dfcd;
+}
+
+.production-sync-result-error {
+  background: #fff4f4;
+  border: 1px solid #ecc7c7;
+}
+
+@keyframes production-progress {
+  0%, 100% { transform: translateX(-55%); }
+  50% { transform: translateX(150%); }
 }
 
 .progress-note {

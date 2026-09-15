@@ -8,6 +8,7 @@ import type {
   BottomUpActivityLogEntry,
   BottomUpAppCandidate,
   BottomUpPublisherCandidate,
+  BottomUpProductionSyncState,
   BottomUpRowDraft,
   BottomUpStep1FilterRule,
   BottomUpStep1PublisherRow,
@@ -45,6 +46,8 @@ const MAX_APP_CANDIDATE_PREVIEW_COUNT = 500;
 declare global {
   // eslint-disable-next-line no-var
   var __bottomUpStoreWritePromise: Promise<void> | undefined;
+  // eslint-disable-next-line no-var
+  var __bottomUpProductionSyncPromise: Promise<void> | undefined;
 }
 
 type PersistedVersion = BottomUpVersionSnapshot & {
@@ -75,6 +78,7 @@ type PersistedStore = {
   versions: PersistedVersion[];
   logs: BottomUpActivityLogEntry[];
   artifacts: PersistedArtifact[];
+  productionSync: BottomUpProductionSyncState;
 };
 
 type ProductionAppFullInfoRecord = {
@@ -110,8 +114,31 @@ type ProductionReadSettings = {
   appFullInfoCurrentNdjson: string;
 };
 
+type ProductionProgress = Pick<
+  BottomUpProductionSyncState,
+  "stage" | "pagesRead" | "scannedRecords" | "expectedRecordCount" | "sourceType"
+>;
+
+type ProductionProgressReporter = (progress: ProductionProgress) => Promise<void>;
+
 function nowIso() {
   return new Date().toISOString();
+}
+
+function createProductionSyncState(): BottomUpProductionSyncState {
+  const timestamp = nowIso();
+  return {
+    status: "idle",
+    stage: "Not started",
+    message: "App Full Info has not been loaded from production yet.",
+    startedAt: "",
+    updatedAt: timestamp,
+    completedAt: "",
+    pagesRead: 0,
+    scannedRecords: 0,
+    expectedRecordCount: 0,
+    sourceType: "",
+  };
 }
 
 function createEntityId(prefix = "id") {
@@ -184,6 +211,46 @@ async function createInitialStore(): Promise<PersistedStore> {
       ),
     ],
     artifacts: [],
+    productionSync: createProductionSyncState(),
+  };
+}
+
+function normalizeProductionSyncState(value: unknown): BottomUpProductionSyncState {
+  const fallback = createProductionSyncState();
+  if (!value || typeof value !== "object") {
+    return fallback;
+  }
+
+  const candidate = value as Partial<BottomUpProductionSyncState>;
+  const status =
+    candidate.status === "running" || candidate.status === "succeeded" || candidate.status === "failed"
+      ? candidate.status
+      : "idle";
+  const normalizedNumber = (input: unknown) => {
+    const numeric = Number(input);
+    return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0;
+  };
+
+  return {
+    status,
+    stage: normalizeText(candidate.stage) || fallback.stage,
+    message: normalizeText(candidate.message) || fallback.message,
+    startedAt: normalizeText(candidate.startedAt),
+    updatedAt: normalizeText(candidate.updatedAt) || fallback.updatedAt,
+    completedAt: normalizeText(candidate.completedAt),
+    pagesRead: normalizedNumber(candidate.pagesRead),
+    scannedRecords: normalizedNumber(candidate.scannedRecords),
+    expectedRecordCount: normalizedNumber(candidate.expectedRecordCount),
+    sourceType: candidate.sourceType === "api" || candidate.sourceType === "file" ? candidate.sourceType : "",
+    summary:
+      candidate.summary && typeof candidate.summary === "object"
+        ? {
+            candidateRows: normalizedNumber(candidate.summary.candidateRows),
+            replacedCount: normalizedNumber(candidate.summary.replacedCount),
+            insertedCount: normalizedNumber(candidate.summary.insertedCount),
+            needsReviewCount: normalizedNumber(candidate.summary.needsReviewCount),
+          }
+        : undefined,
   };
 }
 
@@ -268,6 +335,7 @@ function normalizeStore(value: unknown): PersistedStore {
       versions: [],
       logs: [],
       artifacts: [],
+      productionSync: createProductionSyncState(),
     };
   }
 
@@ -281,9 +349,30 @@ function normalizeStore(value: unknown): PersistedStore {
     versions?: unknown;
     logs?: unknown;
     artifacts?: unknown;
+    productionSync?: unknown;
   };
   const normalizedRows = normalizeBottomUpRows(candidate.rows);
   const safeRows = normalizedRows.length > 5000 ? normalizedRows.filter(shouldKeepBottomUpRow) : normalizedRows;
+  const normalizedLogs = Array.isArray(candidate.logs)
+    ? candidate.logs.map((entry) => normalizeLog(entry)).filter((entry): entry is BottomUpActivityLogEntry => Boolean(entry))
+    : [];
+  const previousSuccessfulSync = normalizedLogs.find((entry) => entry.action === "sync_bottom_up_from_production");
+  const productionSync = candidate.productionSync
+    ? normalizeProductionSyncState(candidate.productionSync)
+    : previousSuccessfulSync
+      ? {
+          status: "succeeded" as const,
+          stage: "Completed",
+          message: previousSuccessfulSync.detail || "App Full Info was loaded from production.",
+          startedAt: previousSuccessfulSync.createdAt,
+          updatedAt: previousSuccessfulSync.createdAt,
+          completedAt: previousSuccessfulSync.createdAt,
+          pagesRead: 0,
+          scannedRecords: 0,
+          expectedRecordCount: 0,
+          sourceType: "" as const,
+        }
+      : createProductionSyncState();
 
   return {
     datasetId: normalizeText(candidate.datasetId) || DATASET_ID,
@@ -317,14 +406,13 @@ function normalizeStore(value: unknown): PersistedStore {
           .map((version, index) => normalizeVersion(version, index))
           .filter((version): version is PersistedVersion => Boolean(version))
       : [],
-    logs: Array.isArray(candidate.logs)
-      ? candidate.logs.map((entry) => normalizeLog(entry)).filter((entry): entry is BottomUpActivityLogEntry => Boolean(entry))
-      : [],
+    logs: normalizedLogs,
     artifacts: Array.isArray(candidate.artifacts)
       ? candidate.artifacts
           .map((artifact) => normalizeArtifact(artifact))
           .filter((artifact): artifact is PersistedArtifact => Boolean(artifact))
       : [],
+    productionSync,
   };
 }
 
@@ -382,6 +470,21 @@ async function readStore(): Promise<PersistedStore> {
     try {
       const parsed = JSON.parse(raw) as unknown;
       const store = normalizeStore(parsed);
+      if (store.productionSync.status === "running" && !globalThis.__bottomUpProductionSyncPromise) {
+        const interruptedAt = nowIso();
+        store.productionSync = {
+          ...store.productionSync,
+          status: "failed",
+          stage: "Interrupted",
+          message: "The production load was interrupted by a workbench restart. Start it again when ready.",
+          updatedAt: interruptedAt,
+          completedAt: interruptedAt,
+        };
+        appendLogs(store, [
+          createLog("production_sync_interrupted", "system", "dataset", DATASET_ID, store.productionSync.message),
+        ]);
+        await writeStore(store);
+      }
       const parsedStore = parsed as Partial<PersistedStore>;
       const parsedRowCount = Array.isArray(parsedStore.rows) ? parsedStore.rows.length : store.rows.length;
       const parsedCandidateCount = Array.isArray(parsedStore.appCandidates)
@@ -672,7 +775,7 @@ async function readManualReferenceRows() {
   }
 }
 
-async function readProductionPublisherCandidates() {
+async function readProductionPublisherCandidates(reportProgress?: ProductionProgressReporter) {
   const settings = await getEffectiveAppSettings();
   const source = settings.bottomUpProductionSource;
   const hasApiSettings = Boolean(settings.strategyDataApiBaseUrl && settings.strategyDataApiKey);
@@ -681,23 +784,23 @@ async function readProductionPublisherCandidates() {
     if (!hasApiSettings) {
       throw new Error("Production source is set to API only, but the Strategy Data API URL or API key is missing in Settings.");
     }
-    return readProductionPublisherCandidatesFromApi(settings);
+    return readProductionPublisherCandidatesFromApi(settings, reportProgress);
   }
 
   if (source === "auto" && hasApiSettings) {
-    return readProductionPublisherCandidatesFromApi(settings);
+    return readProductionPublisherCandidatesFromApi(settings, reportProgress);
   }
 
-  return readProductionPublisherCandidatesFromFile(settings);
+  return readProductionPublisherCandidatesFromFile(settings, reportProgress);
 }
 
-type StrategyDataQueryResponse = {
-  rows?: ProductionAppFullInfoRecord[];
+type StrategyDataQueryResponse<T> = {
+  rows?: T[];
   row_count?: number;
   detail?: string;
 };
 
-async function queryStrategyDataApi(sql: string, settings: ProductionReadSettings) {
+async function queryStrategyDataApi<T = ProductionAppFullInfoRecord>(sql: string, settings: ProductionReadSettings) {
   const baseUrl = settings.strategyDataApiBaseUrl.replace(/\/$/, "");
   const response = await fetch(`${baseUrl}/query`, {
     method: "POST",
@@ -708,10 +811,10 @@ async function queryStrategyDataApi(sql: string, settings: ProductionReadSetting
     body: JSON.stringify({ sql, max_rows: settings.strategyDataApiPageSize }),
   });
   const raw = await response.text();
-  let payload: StrategyDataQueryResponse = {};
+  let payload: StrategyDataQueryResponse<T> = {};
   if (raw) {
     try {
-      payload = JSON.parse(raw) as StrategyDataQueryResponse;
+      payload = JSON.parse(raw) as StrategyDataQueryResponse<T>;
     } catch {
       throw new Error(`Strategy Data API returned a non-JSON response with HTTP ${response.status}.`);
     }
@@ -724,11 +827,39 @@ async function queryStrategyDataApi(sql: string, settings: ProductionReadSetting
   return payload.rows ?? [];
 }
 
-async function readProductionPublisherCandidatesFromApi(settings: ProductionReadSettings) {
+const PRODUCTION_APP_FULL_INFO_WHERE = `
+  publisher_name IS NOT NULL
+  AND publisher_name <> ''
+  AND publisher_name <> '#NAME?'
+  AND (
+    valid_countries @> '["VN"]'::jsonb
+    OR top_countries @> '["VN"]'::jsonb
+    OR publisher_country ILIKE '%Vietnam%'
+  )
+`;
+
+async function readProductionPublisherCandidatesFromApi(
+  settings: ProductionReadSettings,
+  reportProgress?: ProductionProgressReporter,
+) {
   const candidates = new Map<string, ProductionPublisherCandidate>();
   const appCandidates: BottomUpAppCandidate[] = [];
   let scannedRecords = 0;
   let offset = 0;
+  let pagesRead = 0;
+
+  await reportProgress?.({
+    stage: "Counting VN-related App Full Info rows",
+    pagesRead,
+    scannedRecords,
+    expectedRecordCount: 0,
+    sourceType: "api",
+  });
+  const countRows = await queryStrategyDataApi<{ total_records?: unknown }>(
+    `SELECT COUNT(*)::text AS total_records FROM core.dim_app_info WHERE ${PRODUCTION_APP_FULL_INFO_WHERE}`,
+    settings,
+  );
+  const expectedRecordCount = Math.max(0, Number(countRows[0]?.total_records) || 0);
 
   while (true) {
     const sql = `
@@ -742,20 +873,14 @@ async function readProductionPublisherCandidatesFromApi(settings: ProductionRead
         top_countries::text AS top_countries,
         publisher_country
       FROM core.dim_app_info
-      WHERE publisher_name IS NOT NULL
-        AND publisher_name <> ''
-        AND publisher_name <> '#NAME?'
-        AND (
-          valid_countries @> '["VN"]'::jsonb
-          OR top_countries @> '["VN"]'::jsonb
-          OR publisher_country ILIKE '%Vietnam%'
-        )
+      WHERE ${PRODUCTION_APP_FULL_INFO_WHERE}
       ORDER BY app_id
       LIMIT ${settings.strategyDataApiPageSize}
       OFFSET ${offset}
     `;
     const rows = await queryStrategyDataApi(sql, settings);
     scannedRecords += rows.length;
+    pagesRead += 1;
 
     for (const record of rows) {
       const publisherId = normalizeText(record.publisher_id);
@@ -774,8 +899,26 @@ async function readProductionPublisherCandidatesFromApi(settings: ProductionRead
       break;
     }
 
+    if (pagesRead % 3 === 0) {
+      await reportProgress?.({
+        stage: "Reading App Full Info pages",
+        pagesRead,
+        scannedRecords,
+        expectedRecordCount,
+        sourceType: "api",
+      });
+    }
+
     offset += settings.strategyDataApiPageSize;
   }
+
+  await reportProgress?.({
+    stage: "Processing production App Full Info rows",
+    pagesRead,
+    scannedRecords,
+    expectedRecordCount,
+    sourceType: "api",
+  });
 
   return {
     candidates: [...candidates.values()],
@@ -788,12 +931,23 @@ async function readProductionPublisherCandidatesFromApi(settings: ProductionRead
   };
 }
 
-async function readProductionPublisherCandidatesFromFile(settings: ProductionReadSettings) {
+async function readProductionPublisherCandidatesFromFile(
+  settings: ProductionReadSettings,
+  reportProgress?: ProductionProgressReporter,
+) {
   const candidates = new Map<string, ProductionPublisherCandidate>();
   const appCandidates: BottomUpAppCandidate[] = [];
   let scannedRecords = 0;
   let invalidJsonRecords = 0;
   let relatedAppRecords = 0;
+
+  await reportProgress?.({
+    stage: "Reading local App Full Info file",
+    pagesRead: 0,
+    scannedRecords,
+    expectedRecordCount: 0,
+    sourceType: "file",
+  });
 
   const lineReader = createInterface({
     input: createReadStream(settings.appFullInfoCurrentNdjson || PRODUCTION_APP_FULL_INFO_PATH, { encoding: "utf-8" }),
@@ -807,6 +961,16 @@ async function readProductionPublisherCandidatesFromFile(settings: ProductionRea
     }
 
     scannedRecords += 1;
+
+    if (scannedRecords % 5000 === 0) {
+      await reportProgress?.({
+        stage: "Reading local App Full Info file",
+        pagesRead: 0,
+        scannedRecords,
+        expectedRecordCount: 0,
+        sourceType: "file",
+      });
+    }
 
     let record: ProductionAppFullInfoRecord;
     try {
@@ -905,6 +1069,7 @@ function makeWorkbenchState(
       rowCount: version.rowCount,
     })),
     logs: store.logs.slice(0, logLimit),
+    productionSync: store.productionSync,
   };
 }
 
@@ -1194,11 +1359,80 @@ export async function importBottomUpCsvFile(fileName: string, mimeType: string, 
   return makeWorkbenchState(store, operatorName);
 }
 
-export async function syncBottomUpFromProduction(operatorName: string) {
+async function updateProductionSyncProgress(progress: ProductionProgress) {
+  const previousWrite = globalThis.__bottomUpStoreWritePromise;
+  if (previousWrite) {
+    await previousWrite;
+  }
+
   const store = await readStore();
+  if (store.productionSync.status !== "running") {
+    return;
+  }
+
+  store.productionSync = {
+    ...store.productionSync,
+    ...progress,
+    updatedAt: nowIso(),
+  };
+  await writeStore(store);
+}
+
+async function markProductionSyncStarted(operatorName: string) {
+  const previousWrite = globalThis.__bottomUpStoreWritePromise;
+  if (previousWrite) {
+    await previousWrite;
+  }
+
+  const store = await readStore();
+  const startedAt = nowIso();
+  store.productionSync = {
+    status: "running",
+    stage: "Preparing production App Full Info load",
+    message: "The production load is running. You can leave this page; progress will remain available.",
+    startedAt,
+    updatedAt: startedAt,
+    completedAt: "",
+    pagesRead: 0,
+    scannedRecords: 0,
+    expectedRecordCount: 0,
+    sourceType: "",
+  };
+  appendLogs(store, [
+    createLog("sync_bottom_up_from_production_started", operatorName, "dataset", DATASET_ID, "Started production App Full Info load."),
+  ]);
+  await writeStore(store);
+  return store.productionSync;
+}
+
+async function markProductionSyncFailed(error: unknown) {
+  const previousWrite = globalThis.__bottomUpStoreWritePromise;
+  if (previousWrite) {
+    await previousWrite;
+  }
+
+  const store = await readStore();
+  const completedAt = nowIso();
+  const detail = error instanceof Error ? error.message : "Failed to load App Full Info from production.";
+  store.productionSync = {
+    ...store.productionSync,
+    status: "failed",
+    stage: "Failed",
+    message: detail,
+    updatedAt: completedAt,
+    completedAt,
+  };
+  appendLogs(store, [
+    createLog("sync_bottom_up_from_production_failed", "system", "dataset", DATASET_ID, detail),
+  ]);
+  await writeStore(store);
+}
+
+async function runBottomUpProductionSync(operatorName: string) {
   const manualReferenceRows = await readManualReferenceRows();
+  const production = await readProductionPublisherCandidates(updateProductionSyncProgress);
+  const store = await readStore();
   const references = buildReferenceLookups([...manualReferenceRows, ...store.rows]);
-  const production = await readProductionPublisherCandidates();
   const productionRows = production.candidates
     .map((candidate, index) => createRowFromProductionCandidate(candidate, index + 1, references))
     .filter((row) => row.cleanedPublisherName);
@@ -1222,6 +1456,25 @@ export async function syncBottomUpFromProduction(operatorName: string) {
     insertedCount: mergeResult.insertedCount,
     needsReviewCount,
   };
+  const completedAt = nowIso();
+  store.productionSync = {
+    ...store.productionSync,
+    status: "succeeded",
+    stage: "Completed",
+    message: `Loaded ${summary.candidateRows} publisher candidates from production App Full Info.`,
+    updatedAt: completedAt,
+    completedAt,
+    pagesRead: store.productionSync.pagesRead,
+    scannedRecords: summary.scannedRecords,
+    expectedRecordCount: store.productionSync.expectedRecordCount || summary.scannedRecords,
+    sourceType: summary.sourceType,
+    summary: {
+      candidateRows: summary.candidateRows,
+      replacedCount: summary.replacedCount,
+      insertedCount: summary.insertedCount,
+      needsReviewCount: summary.needsReviewCount,
+    },
+  };
 
   appendLogs(store, [
     createLog(
@@ -1234,6 +1487,40 @@ export async function syncBottomUpFromProduction(operatorName: string) {
   ]);
   await writeStore(store);
   return { state: makeWorkbenchState(store, operatorName), summary };
+}
+
+export async function getBottomUpProductionSyncState() {
+  return (await readStore()).productionSync;
+}
+
+export async function startBottomUpProductionSync(operatorName: string) {
+  const existing = await getBottomUpProductionSyncState();
+  if (existing.status === "running" && globalThis.__bottomUpProductionSyncPromise) {
+    return { started: false, syncStatus: existing };
+  }
+
+  const syncStatus = await markProductionSyncStarted(operatorName);
+  const job = runBottomUpProductionSync(operatorName)
+    .catch(async (error) => {
+      await markProductionSyncFailed(error);
+    })
+    .then(() => undefined)
+    .finally(() => {
+      globalThis.__bottomUpProductionSyncPromise = undefined;
+    });
+  globalThis.__bottomUpProductionSyncPromise = job;
+
+  return { started: true, syncStatus };
+}
+
+export async function syncBottomUpFromProduction(operatorName: string) {
+  await markProductionSyncStarted(operatorName);
+  try {
+    return await runBottomUpProductionSync(operatorName);
+  } catch (error) {
+    await markProductionSyncFailed(error);
+    throw error;
+  }
 }
 
 export async function exportBottomUpCsv(operatorName: string) {

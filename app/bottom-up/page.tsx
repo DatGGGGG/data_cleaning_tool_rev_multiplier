@@ -14,6 +14,18 @@ export default async function BottomUpPage() {
     publisherCandidateCount: 0,
     versions: [],
     logs: [],
+    productionSync: {
+      status: "idle",
+      stage: "Not started",
+      message: "App Full Info has not been loaded from production yet.",
+      startedAt: "",
+      updatedAt: "",
+      completedAt: "",
+      pagesRead: 0,
+      scannedRecords: 0,
+      expectedRecordCount: 0,
+      sourceType: "",
+    },
   };
   return (
     <BottomUpEditor

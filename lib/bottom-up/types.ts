@@ -98,6 +98,27 @@ export type BottomUpActivityLogEntry = {
   createdAt: string;
 };
 
+export type BottomUpProductionSyncStatus = "idle" | "running" | "succeeded" | "failed";
+
+export type BottomUpProductionSyncState = {
+  status: BottomUpProductionSyncStatus;
+  stage: string;
+  message: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string;
+  pagesRead: number;
+  scannedRecords: number;
+  expectedRecordCount: number;
+  sourceType: "api" | "file" | "";
+  summary?: {
+    candidateRows: number;
+    replacedCount: number;
+    insertedCount: number;
+    needsReviewCount: number;
+  };
+};
+
 export type BottomUpWorkbenchState = {
   datasetId: string;
   operatorName: string;
@@ -110,4 +131,5 @@ export type BottomUpWorkbenchState = {
   publisherCandidateCount: number;
   versions: BottomUpVersionSnapshot[];
   logs: BottomUpActivityLogEntry[];
+  productionSync: BottomUpProductionSyncState;
 };

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import type {
   BottomUpActivityLogEntry,
   BottomUpAppCandidate,
+  BottomUpProductionSyncState,
   BottomUpReviewStatus,
   BottomUpRowDraft,
   BottomUpStep1PublisherRow,
@@ -34,6 +35,13 @@ type WorkbenchResponse = {
     insertedCount: number;
     needsReviewCount: number;
   };
+};
+
+type ProductionSyncResponse = {
+  syncStatus?: BottomUpProductionSyncState;
+  started?: boolean;
+  message?: string;
+  error?: string;
 };
 
 type Step1PublishersResponse = {
@@ -386,23 +394,26 @@ export function BottomUpEditor({
   const [batchAction, setBatchAction] = useState<BatchAction>("update_status");
   const [batchStatus, setBatchStatus] = useState<BottomUpReviewStatus>("needs_review");
   const [isBusy, setIsBusy] = useState(false);
-  const [productionSyncStatus, setProductionSyncStatus] = useState<"idle" | "syncing">("idle");
-  const [productionSyncStartedAt, setProductionSyncStartedAt] = useState<number | null>(null);
-  const [productionSyncElapsedSeconds, setProductionSyncElapsedSeconds] = useState(0);
-  const [productionSyncStageIndex, setProductionSyncStageIndex] = useState(0);
   const [saveState, setSaveState] = useState<"saved" | "dirty" | "saving">("saved");
   const [statusMessage, setStatusMessage] = useState("Bottom-up editor ready.");
   const [hasLoadedWorkbench, setHasLoadedWorkbench] = useState(initialState.rows.length > 0);
   const isFirstRenderRef = useRef(true);
   const latestRowsRef = useRef(state.rows);
   const suppressNextAutoSaveRef = useRef(false);
+  const completedProductionSyncRef = useRef("");
 
   const latestLogs: BottomUpActivityLogEntry[] = state.logs.slice(0, 6);
   const latestVersions: BottomUpVersionSnapshot[] = state.versions.slice(0, 4);
-  const lastProductionLoad = state.logs.find((entry) => entry.action === "sync_bottom_up_from_production");
-  const lastProductionLoadLabel = lastProductionLoad
-    ? new Date(lastProductionLoad.createdAt).toLocaleString()
-    : "Never loaded";
+  const productionSync = state.productionSync;
+  const productionSyncIsRunning = productionSync.status === "running";
+  const lastProductionLoadLabel =
+    productionSync.status === "succeeded" && productionSync.completedAt
+      ? new Date(productionSync.completedAt).toLocaleString()
+      : "Never loaded";
+  const productionSyncProgress =
+    productionSync.expectedRecordCount > 0
+      ? Math.min(99, Math.round((productionSync.scannedRecords / productionSync.expectedRecordCount) * 100))
+      : 0;
   const registeredPublisherNameOptions = useMemo(
     () => [...new Set(publisherNameRegistry.map((name) => name.trim()).filter(Boolean))],
     [publisherNameRegistry],
@@ -457,19 +468,6 @@ export function BottomUpEditor({
     }
     return [...counts.values()].filter((count) => count > 1).length;
   }, [state.rows]);
-  const productionSyncStages = [
-    "Connecting to production data source",
-    "Reading App Full Info pages",
-    "Filtering VN-related app rows",
-    "Building publisher candidates",
-    "Upserting Step 2 publisher ID rows",
-    "Saving refreshed workbench data",
-  ];
-  const productionSyncProgress =
-    productionSyncStatus === "syncing"
-      ? Math.min(92, 12 + productionSyncStageIndex * 14 + (productionSyncElapsedSeconds % 8))
-      : 0;
-
   const filteredRows = useMemo(
     () => sortRows(effectiveRows.filter((row) => rowMatchesFilters(row, appliedFilters)), sortField, sortDirection),
     [appliedFilters, effectiveRows, sortDirection, sortField],
@@ -545,22 +543,37 @@ export function BottomUpEditor({
   }, [saveState]);
 
   useEffect(() => {
-    if (productionSyncStatus !== "syncing" || productionSyncStartedAt === null) {
-      setProductionSyncElapsedSeconds(0);
-      setProductionSyncStageIndex(0);
+    if (!productionSyncIsRunning) {
       return;
     }
 
-    const updateProgress = () => {
-      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - productionSyncStartedAt) / 1000));
-      setProductionSyncElapsedSeconds(elapsedSeconds);
-      setProductionSyncStageIndex(Math.min(productionSyncStages.length - 1, Math.floor(elapsedSeconds / 8)));
+    let cancelled = false;
+    const refreshSyncStatus = async () => {
+      try {
+        const response = await fetch(appApiPath("/api/bottom-up/production-sync"), { cache: "no-store" });
+        const payload = (await response.json()) as ProductionSyncResponse;
+        if (!response.ok || !payload.syncStatus || cancelled) {
+          return;
+        }
+
+        setState((current) => ({ ...current, productionSync: payload.syncStatus as BottomUpProductionSyncState }));
+        if (payload.syncStatus.status !== "running" && completedProductionSyncRef.current !== payload.syncStatus.updatedAt) {
+          completedProductionSyncRef.current = payload.syncStatus.updatedAt;
+          setStatusMessage(payload.syncStatus.message);
+          void reloadWorkbench();
+        }
+      } catch {
+        // Keep the last persisted status visible; the next poll can recover from a transient network issue.
+      }
     };
 
-    updateProgress();
-    const handle = window.setInterval(updateProgress, 1000);
-    return () => window.clearInterval(handle);
-  }, [productionSyncStartedAt, productionSyncStatus, productionSyncStages.length]);
+    void refreshSyncStatus();
+    const handle = window.setInterval(() => void refreshSyncStatus(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [productionSyncIsRunning]);
 
   async function parseResponse(response: Response) {
     const raw = await response.text();
@@ -1087,28 +1100,21 @@ export function BottomUpEditor({
 
   async function syncFromProduction() {
     setIsBusy(true);
-    setProductionSyncStatus("syncing");
-    setProductionSyncStartedAt(Date.now());
-    setProductionSyncElapsedSeconds(0);
-    setProductionSyncStageIndex(0);
-    setStatusMessage("Loading production App Full Info. Existing rows are upserted by publisher_id.");
     try {
       const response = await fetch(appApiPath("/api/bottom-up/production-sync"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ operatorName }),
       });
-      const payload = await parseResponse(response);
-      const summary = payload.summary;
-      const message = summary
-        ? `Loaded production App Full Info via ${summary.sourceType ?? "source"}: ${summary.candidateRows} candidates, ${summary.replacedCount} refreshed, ${summary.insertedCount} inserted, ${summary.needsReviewCount} needs review.`
-        : payload.message || "Loaded production App Full Info.";
-      applyServerState(payload.state, message, { refresh: true });
+      const payload = (await response.json()) as ProductionSyncResponse;
+      if (!response.ok || !payload.syncStatus) {
+        throw new Error(payload.error || "Failed to start production App Full Info load.");
+      }
+      setState((current) => ({ ...current, productionSync: payload.syncStatus as BottomUpProductionSyncState }));
+      setStatusMessage(payload.message || payload.syncStatus.message);
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Failed to load production App Full Info.");
     } finally {
-      setProductionSyncStatus("idle");
-      setProductionSyncStartedAt(null);
       setIsBusy(false);
     }
   }
@@ -1195,7 +1201,7 @@ export function BottomUpEditor({
         <button type="button" className="button button-secondary" onClick={addRow} disabled={isBusy}>
           Add Row
         </button>
-        <button type="button" className="button button-secondary" onClick={() => void syncFromProduction()} disabled={isBusy}>
+        <button type="button" className="button button-secondary" onClick={() => void syncFromProduction()} disabled={isBusy || productionSyncIsRunning}>
           Load from Production
         </button>
         <button type="button" className="button button-primary" onClick={() => void saveRows(state.rows)} disabled={isBusy}>
@@ -1301,15 +1307,15 @@ export function BottomUpEditor({
           {workflowStep === "step0" ? (
             <>
               <div className="step-toolbar">
-                <button type="button" className="button button-primary" onClick={() => void syncFromProduction()} disabled={isBusy}>
-                  {productionSyncStatus === "syncing" ? "Loading Production..." : "Load App Full Info from Production"}
+                <button type="button" className="button button-primary" onClick={() => void syncFromProduction()} disabled={isBusy || productionSyncIsRunning}>
+                  {productionSyncIsRunning ? "Loading Production..." : "Load App Full Info from Production"}
                 </button>
                 <span className="muted-text">
                   Showing {formatCount(step0PreviewRows.length)} of {formatCount(state.appCandidateCount)} VN-related app rows.
                 </span>
                 <span className="muted-text">Last loaded on: {lastProductionLoadLabel}</span>
               </div>
-              <div className={`production-sync-panel ${productionSyncStatus === "syncing" ? "production-sync-panel-active" : ""}`}>
+              <div className={`production-sync-panel production-sync-panel-${productionSync.status}`}>
                 <div>
                   <strong>What happens when you load again?</strong>
                   <p>
@@ -1318,25 +1324,44 @@ export function BottomUpEditor({
                     names, multipliers, status, notes, and audit fields are preserved where possible.
                   </p>
                 </div>
-                {productionSyncStatus === "syncing" ? (
+                {productionSync.status === "running" ? (
                   <div className="progress-block" aria-live="polite">
                     <div className="progress-meta">
-                      <span>{productionSyncStages[productionSyncStageIndex]}</span>
-                      <span>{productionSyncElapsedSeconds}s elapsed</span>
+                      <span>{productionSync.stage}</span>
+                      <span>
+                        {productionSync.expectedRecordCount > 0
+                          ? `${formatCount(productionSync.scannedRecords)} of ${formatCount(productionSync.expectedRecordCount)} rows`
+                          : `${formatCount(productionSync.scannedRecords)} rows read`}
+                      </span>
                     </div>
                     <div
-                      className="determinate-progress"
+                      className={`determinate-progress ${productionSync.expectedRecordCount > 0 ? "" : "determinate-progress-indeterminate"}`}
                       aria-label="Production sync progress"
                       aria-valuemin={0}
                       aria-valuemax={100}
                       aria-valuenow={productionSyncProgress}
                       role="progressbar"
                     >
-                      <span style={{ width: `${productionSyncProgress}%` }} />
+                      <span style={{ width: `${productionSync.expectedRecordCount > 0 ? productionSyncProgress : 38}%` }} />
                     </div>
                     <p className="progress-note">
-                      This can take a while for large App Full Info loads. Keep this tab open until the summary appears.
+                      {productionSync.message} You can leave this page and return later; the current status is saved by the server.
                     </p>
+                  </div>
+                ) : productionSync.status === "succeeded" ? (
+                  <div className="production-sync-result production-sync-result-success" aria-live="polite">
+                    <strong>Last production load completed</strong>
+                    <p>{productionSync.message}</p>
+                    <span>
+                      {productionSync.completedAt ? new Date(productionSync.completedAt).toLocaleString() : "Completion time unavailable"}
+                      {productionSync.summary ? ` | ${formatCount(productionSync.summary.replacedCount)} refreshed, ${formatCount(productionSync.summary.insertedCount)} inserted` : ""}
+                    </span>
+                  </div>
+                ) : productionSync.status === "failed" ? (
+                  <div className="production-sync-result production-sync-result-error" role="alert">
+                    <strong>Last production load failed</strong>
+                    <p>{productionSync.message}</p>
+                    <span>{productionSync.completedAt ? new Date(productionSync.completedAt).toLocaleString() : "Failure time unavailable"}</span>
                   </div>
                 ) : null}
               </div>

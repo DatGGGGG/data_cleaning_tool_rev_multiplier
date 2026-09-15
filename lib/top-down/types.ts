@@ -86,6 +86,14 @@ export type TopDownVersionSnapshot = {
   publisherCount: number;
 };
 
+export type TopDownVersionMetadata = TopDownVersionSnapshot & {
+  workflow: "top_down";
+  schemaVersion: 1;
+  csvByteSize: number;
+  checksumSha256: string;
+  flattenedAppCount: number;
+};
+
 export type TopDownWorkbenchState = {
   datasetId: string;
   operatorName: string;

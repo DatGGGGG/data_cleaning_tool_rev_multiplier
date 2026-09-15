@@ -7,6 +7,7 @@
     "dev:webpack": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "node --test --experimental-strip-types --loader ./tests/alias-loader.mjs tests/*.test.mjs",
     "lint": "next lint",
     "db:generate": "prisma generate",
     "db:push": "prisma db push"

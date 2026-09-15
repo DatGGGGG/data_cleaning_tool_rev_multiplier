@@ -12,6 +12,7 @@ import type {
   BottomUpStep1FilterRule,
   BottomUpStep1PublisherRow,
   BottomUpStep1SortField,
+  BottomUpVersionMetadata,
   BottomUpVersionSnapshot,
   BottomUpWorkbenchState,
 } from "@/lib/bottom-up/types";
@@ -23,6 +24,7 @@ import {
   normalizeText,
   upsertRowsByPublisherId,
 } from "@/lib/bottom-up/workbench";
+import { getCsvIntegrity, VersionNotFoundError } from "@/lib/version-api";
 
 const STORAGE_ROOT = path.join(process.cwd(), "storage");
 const IMPORTS_DIR = path.join(STORAGE_ROOT, "imports");
@@ -1287,22 +1289,32 @@ export async function createBottomUpVersion(operatorName: string) {
   return makeWorkbenchState(store, operatorName);
 }
 
-export async function listBottomUpVersions(): Promise<BottomUpVersionSnapshot[]> {
+export async function listBottomUpVersions(): Promise<BottomUpVersionMetadata[]> {
   const store = await readStore();
-  return store.versions.map(({ id, label, createdAt, createdBy, rowCount }) => ({
-    id,
-    label,
-    createdAt,
-    createdBy,
-    rowCount,
-  }));
+  return store.versions.map(({ id, label, createdAt, createdBy, rowCount, rows }) => {
+    const csv = buildBottomUpCsv(rows);
+    return {
+      id,
+      workflow: "bottom_up",
+      label,
+      createdAt,
+      createdBy,
+      schemaVersion: 1,
+      rowCount,
+      mappedRowCount: rows.filter(
+        (row) => row.cleanedPublisherName && row.publisherId && row.publisherName,
+      ).length,
+      needsReviewCount: rows.filter((row) => row.reviewStatus === "needs_review").length,
+      ...getCsvIntegrity(csv),
+    };
+  });
 }
 
 export async function exportBottomUpVersionCsv(versionId: string) {
   const store = await readStore();
   const version = store.versions.find((item) => item.id === versionId);
   if (!version) {
-    throw new Error("Version not found.");
+    throw new VersionNotFoundError();
   }
 
   return {

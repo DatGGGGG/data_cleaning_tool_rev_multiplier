@@ -11,6 +11,7 @@ import type {
   SensorTowerResolveResponse,
   TopDownOverviewState,
   TopDownPublisherRegistryEntry,
+  TopDownVersionMetadata,
   TopDownVersionSnapshot,
   TopDownWorkbenchState,
 } from "@/lib/top-down/types";
@@ -21,6 +22,7 @@ import {
   normalizePublisherRow,
   normalizePublisherSheet,
 } from "@/lib/top-down/workbench";
+import { getCsvIntegrity, VersionNotFoundError } from "@/lib/version-api";
 
 const STORAGE_ROOT = path.join(process.cwd(), "storage");
 const IMPORTS_DIR = path.join(STORAGE_ROOT, "imports");
@@ -1071,24 +1073,30 @@ export async function createTopDownVersion(operatorName: string) {
   return makeWorkbenchState(store, operatorName);
 }
 
-export async function listTopDownVersions(): Promise<TopDownVersionSnapshot[]> {
-  ensureAutoRefreshSchedulerStarted();
+export async function listTopDownVersions(): Promise<TopDownVersionMetadata[]> {
   const store = await readStore();
-  return store.versions.map(({ id, label, createdAt, createdBy, publisherCount }) => ({
-    id,
-    label,
-    createdAt,
-    createdBy,
-    publisherCount,
-  }));
+  return store.versions.map(({ id, label, createdAt, createdBy, publisherCount, publishers }) => {
+    const flattenedRows = flattenPublisherRows(publishers);
+    const csv = buildFlattenedCsv(flattenedRows);
+    return {
+      id,
+      workflow: "top_down",
+      label,
+      createdAt,
+      createdBy,
+      schemaVersion: 1,
+      publisherCount,
+      flattenedAppCount: flattenedRows.length,
+      ...getCsvIntegrity(csv),
+    };
+  });
 }
 
 export async function exportTopDownVersionCsv(versionId: string) {
-  ensureAutoRefreshSchedulerStarted();
   const store = await readStore();
   const version = store.versions.find((item) => item.id === versionId);
   if (!version) {
-    throw new Error("Version not found.");
+    throw new VersionNotFoundError();
   }
 
   const csv = buildFlattenedCsv(flattenPublisherRows(version.publishers));

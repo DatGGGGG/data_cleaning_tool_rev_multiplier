@@ -79,6 +79,15 @@ export type BottomUpVersionSnapshot = {
   rowCount: number;
 };
 
+export type BottomUpVersionMetadata = BottomUpVersionSnapshot & {
+  workflow: "bottom_up";
+  schemaVersion: 1;
+  csvByteSize: number;
+  checksumSha256: string;
+  mappedRowCount: number;
+  needsReviewCount: number;
+};
+
 export type BottomUpActivityLogEntry = {
   id: string;
   action: string;

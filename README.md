@@ -125,7 +125,8 @@ cp .env.production.example .env.production
 ```
 
 Edit `.env.production` with the real `ST_API_KEY`, `STRATEGY_DATA_API_KEY`, and a private
-`SENSORTOWER_REFRESH_TOKEN`. Confirm `STRATEGY_DATA_API_BASE_URL` points to the production VN Strategy API. The
+`SENSORTOWER_REFRESH_TOKEN`. Also set `PORTAL_SERVICE_TOKEN` to the same long random secret configured in the
+VN Market Data Portal backend. Confirm `STRATEGY_DATA_API_BASE_URL` points to the production VN Strategy API. The
 provided default uses `host.docker.internal:8001`, matching the VM port currently used by that API.
 
 Build and start the service:
@@ -156,6 +157,65 @@ To update after a later Git push:
 
 ```bash
 git pull --ff-only origin main
+docker compose up -d --build
+```
+
+### Portal mapping version API
+
+The portal backend can list and download saved mapping snapshots through these read-only endpoints:
+
+```text
+GET /cleaning/sensortower/api/top-down/versions
+GET /cleaning/sensortower/api/top-down/versions/{versionId}/download
+GET /cleaning/sensortower/api/bottom-up/versions
+GET /cleaning/sensortower/api/bottom-up/versions/{versionId}/download
+```
+
+Every request must include the service credential in an HTTP header. Never put it in a browser bundle or URL:
+
+```text
+Authorization: Bearer <PORTAL_SERVICE_TOKEN>
+```
+
+Example list request from the portal backend:
+
+```bash
+curl -H "Authorization: Bearer $PORTAL_SERVICE_TOKEN" \
+  https://market-data.garena.vn/cleaning/sensortower/api/top-down/versions
+```
+
+Example metadata response:
+
+```json
+{
+  "versions": [
+    {
+      "id": "5f3d6f5f-51d2-4b63-ae52-ec717e89b934",
+      "workflow": "top_down",
+      "label": "Snapshot 9/15/2026, 11:00:00 AM",
+      "createdAt": "2026-09-15T04:00:00.000Z",
+      "createdBy": "Data Cleaning Ops",
+      "schemaVersion": 1,
+      "csvByteSize": 12345,
+      "checksumSha256": "lowercase-sha256-value",
+      "publisherCount": 16,
+      "flattenedAppCount": 964
+    }
+  ]
+}
+```
+
+Example download request:
+
+```bash
+curl -OJ -H "Authorization: Bearer $PORTAL_SERVICE_TOKEN" \
+  https://market-data.garena.vn/cleaning/sensortower/api/top-down/versions/5f3d6f5f-51d2-4b63-ae52-ec717e89b934/download
+```
+
+The endpoints return `401` for a missing or invalid credential and fail closed with `503` when
+`PORTAL_SERVICE_TOKEN` is not configured. Changing the token requires rebuilding or restarting the Compose service:
+
+```bash
 docker compose up -d --build
 ```
 

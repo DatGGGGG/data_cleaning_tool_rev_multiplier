@@ -1286,3 +1286,27 @@ export async function createBottomUpVersion(operatorName: string) {
   await writeStore(store);
   return makeWorkbenchState(store, operatorName);
 }
+
+export async function listBottomUpVersions(): Promise<BottomUpVersionSnapshot[]> {
+  const store = await readStore();
+  return store.versions.map(({ id, label, createdAt, createdBy, rowCount }) => ({
+    id,
+    label,
+    createdAt,
+    createdBy,
+    rowCount,
+  }));
+}
+
+export async function exportBottomUpVersionCsv(versionId: string) {
+  const store = await readStore();
+  const version = store.versions.find((item) => item.id === versionId);
+  if (!version) {
+    throw new Error("Version not found.");
+  }
+
+  return {
+    fileName: `mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_${version.id}.csv`,
+    csv: buildBottomUpCsv(version.rows),
+  };
+}

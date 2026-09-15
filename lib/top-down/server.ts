@@ -1071,6 +1071,33 @@ export async function createTopDownVersion(operatorName: string) {
   return makeWorkbenchState(store, operatorName);
 }
 
+export async function listTopDownVersions(): Promise<TopDownVersionSnapshot[]> {
+  ensureAutoRefreshSchedulerStarted();
+  const store = await readStore();
+  return store.versions.map(({ id, label, createdAt, createdBy, publisherCount }) => ({
+    id,
+    label,
+    createdAt,
+    createdBy,
+    publisherCount,
+  }));
+}
+
+export async function exportTopDownVersionCsv(versionId: string) {
+  ensureAutoRefreshSchedulerStarted();
+  const store = await readStore();
+  const version = store.versions.find((item) => item.id === versionId);
+  if (!version) {
+    throw new Error("Version not found.");
+  }
+
+  const csv = buildFlattenedCsv(flattenPublisherRows(version.publishers));
+  return {
+    fileName: `mapping_publisher_to_apps_top_down_${version.id}.csv`,
+    csv,
+  };
+}
+
 export async function restoreTopDownVersion(versionId: string, operatorName: string) {
   ensureAutoRefreshSchedulerStarted();
   const store = await readStore();

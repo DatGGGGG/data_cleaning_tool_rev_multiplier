@@ -1,5 +1,16 @@
 import { NextResponse } from "next/server";
-import { createBottomUpVersion } from "@/lib/bottom-up/server";
+import { createBottomUpVersion, listBottomUpVersions } from "@/lib/bottom-up/server";
+
+export async function GET() {
+  try {
+    return NextResponse.json({ versions: await listBottomUpVersions() });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to load bottom-up versions." },
+      { status: 500 },
+    );
+  }
+}
 
 export async function POST(request: Request) {
   try {

@@ -160,6 +160,23 @@ git pull --ff-only origin main
 docker compose up -d --build
 ```
 
+### Bottom Up App Full Info source
+
+Bottom Up Step 0 reads the production App Full Info dimension through the VN Strategy Data API's guarded
+`POST /query` endpoint. It queries `core.dim_app_info` in batches of up to 500 rows and keeps only apps related
+to Vietnam through `valid_countries`, `top_countries`, or `publisher_country`.
+
+In the deployed workbench, open **Settings** and configure:
+
+- **Production source:** `API only`
+- **Strategy Data API base URL:** `http://host.docker.internal:8001`
+- **Strategy Data API key:** a dedicated active API key from the VN Strategy Data System
+- **API fetch batch size:** `500`
+
+Use **Test App Full Info Connection** before the first Step 0 load. It performs one authenticated, read-only query
+against `core.dim_app_info` and shows a sample app only when the API, key, and table are all available. The API key
+is never returned to the browser after it has been saved.
+
 ### Portal mapping version API
 
 The portal backend can list and download saved mapping snapshots through these read-only endpoints:

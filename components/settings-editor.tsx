@@ -14,6 +14,18 @@ type SettingsResponse = {
   error?: string;
 };
 
+type ConnectionTestResponse = {
+  baseUrl?: string;
+  sampleApp?: {
+    appId: string;
+    name: string;
+    publisherName: string;
+    publisherId: string;
+  };
+  message?: string;
+  error?: string;
+};
+
 async function parseSettingsResponse(response: Response) {
   const raw = await response.text();
   const payload = raw ? (JSON.parse(raw) as SettingsResponse) : {};
@@ -29,6 +41,7 @@ export function SettingsEditor({ initialSettings }: SettingsEditorProps) {
   const [operatorName, setOperatorName] = useState("Local operator");
   const [clearApiKey, setClearApiKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Settings ready.");
 
   async function saveSettings() {
@@ -55,6 +68,36 @@ export function SettingsEditor({ initialSettings }: SettingsEditorProps) {
       setStatusMessage(error instanceof Error ? error.message : "Failed to save settings.");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function testConnection() {
+    setIsTestingConnection(true);
+    try {
+      const response = await fetch(appApiPath("/api/settings/strategy-data/test"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategyDataApiBaseUrl: settings.strategyDataApiBaseUrl,
+          strategyDataApiKey: clearApiKey ? "" : apiKeyInput,
+        }),
+      });
+      const raw = await response.text();
+      const payload = raw ? (JSON.parse(raw) as ConnectionTestResponse) : {};
+      if (!response.ok) {
+        throw new Error(payload.error || "Could not connect to App Full Info.");
+      }
+
+      const sample = payload.sampleApp;
+      setStatusMessage(
+        sample
+          ? `Connected. App Full Info is available; sample: ${sample.name || sample.appId}.`
+          : payload.message || "Connected to App Full Info.",
+      );
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not connect to App Full Info.");
+    } finally {
+      setIsTestingConnection(false);
     }
   }
 
@@ -112,8 +155,11 @@ export function SettingsEditor({ initialSettings }: SettingsEditorProps) {
               onChange={(event) =>
                 setSettings((current) => ({ ...current, strategyDataApiBaseUrl: event.target.value }))
               }
-              placeholder="http://localhost:8000"
+              placeholder="http://host.docker.internal:8001"
             />
+            <span className="field-help">
+              On the deployed workbench VM, use <code>http://host.docker.internal:8001</code>. For local development, use <code>http://localhost:8001</code>.
+            </span>
           </label>
 
           <label className="settings-field">
@@ -185,6 +231,14 @@ export function SettingsEditor({ initialSettings }: SettingsEditorProps) {
         <div className="settings-actions">
           <button type="button" className="button button-primary" onClick={() => void saveSettings()} disabled={isSaving}>
             Save Settings
+          </button>
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => void testConnection()}
+            disabled={isSaving || isTestingConnection}
+          >
+            {isTestingConnection ? "Testing Connection..." : "Test App Full Info Connection"}
           </button>
           <span className="muted-text">
             Last updated by {settings.updatedBy} at {new Date(settings.updatedAt).toLocaleString()}

@@ -1703,7 +1703,7 @@ async function runBottomUpProductionSync(operatorName: string, requestedJobId?: 
     ...sync,
     status: "succeeded",
     stage: "Completed",
-    message: `Loaded ${result.summary.candidateRows} publisher candidates from production App Full Info.`,
+    message: `Loaded ${result.summary.relatedAppRecords} VN-related App Full Info rows and found ${result.publisherCandidateCount} raw publisher names. Refreshed ${result.summary.candidateRows} already-mapped publisher IDs.`,
     updatedAt: completedAt,
     completedAt,
     heartbeatAt: completedAt,

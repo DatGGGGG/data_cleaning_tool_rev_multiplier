@@ -1148,6 +1148,42 @@ export function BottomUpEditor({
     }
   }
 
+  async function exportStep1FilteredCsv() {
+    setIsBusy(true);
+    try {
+      const query = new URLSearchParams({
+        operatorName,
+        filters: JSON.stringify(step1AppliedFilters),
+        sortField: step1SortField,
+        sortDirection: step1SortDirection,
+      });
+      const response = await fetch(appApiPath(`/api/bottom-up/step1-publishers/export?${query.toString()}`), {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error((await response.text()) || "Failed to export filtered Step 1 publisher names.");
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      const fileName =
+        response.headers.get("Content-Disposition")?.match(/filename=\"([^\"]+)\"/)?.[1] ??
+        "bottom_up_step1_publisher_names_filtered.csv";
+      const rowCount = Number(response.headers.get("X-Export-Row-Count") ?? step1TotalCount);
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.click();
+      window.URL.revokeObjectURL(url);
+      await reloadWorkbench();
+      setStatusMessage(`Exported ${formatCount(rowCount)} filtered Step 1 publisher names to ${fileName}.`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Failed to export filtered Step 1 publisher names.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   async function saveVersion() {
     setIsBusy(true);
     try {
@@ -1469,6 +1505,15 @@ export function BottomUpEditor({
 
                   <div className="batch-controls">
                     <span className="field-label">Step 1 Batch</span>
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={() => void exportStep1FilteredCsv()}
+                      disabled={isBusy || step1TotalCount === 0}
+                      title="Exports every Step 1 publisher name matching the applied filters, across all pages."
+                    >
+                      Export Filtered CSV
+                    </button>
                     <select className="input select-input" value={step1BatchCheckedValue} onChange={(event) => setStep1BatchCheckedValue(event.target.value as "checked" | "unchecked")}>
                       <option value="checked">Mark checked</option>
                       <option value="unchecked">Mark unchecked</option>

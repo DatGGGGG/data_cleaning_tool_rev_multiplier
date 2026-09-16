@@ -20,6 +20,7 @@ import type {
 } from "@/lib/bottom-up/types";
 import {
   buildBottomUpCsv,
+  buildBottomUpStep1PublisherCsv,
   importBottomUpRowsFromCsv,
   normalizeBottomUpRow,
   normalizeBottomUpRows,
@@ -1457,6 +1458,42 @@ export async function getBottomUpStep1PublisherPage(params: {
     totalPublisherCount: store.publisherCandidateCount || store.publisherCandidates.length,
     checkedPublisherCount: store.checkedPublisherNames.length,
   };
+}
+
+export async function exportBottomUpStep1PublisherCsv(params: {
+  operatorName: string;
+  filters: BottomUpStep1FilterRule[];
+  sortField: BottomUpStep1SortField | "";
+  sortDirection: "asc" | "desc";
+}) {
+  const store = await readStore();
+  const rows = getFilteredStep1Rows(store, params.filters, params.sortField, params.sortDirection);
+  const csv = buildBottomUpStep1PublisherCsv(rows);
+  const fileName = `bottom_up_step1_publisher_names_filtered_${Date.now()}.csv`;
+  const storedPath = path.join(EXPORTS_DIR, fileName);
+  await fs.writeFile(storedPath, csv, "utf-8");
+
+  store.artifacts.unshift({
+    id: createEntityId("artifact"),
+    kind: "export_csv",
+    originalName: fileName,
+    storagePath: storedPath,
+    mimeType: "text/csv",
+    createdAt: nowIso(),
+    createdBy: params.operatorName,
+  });
+  appendLogs(store, [
+    createLog(
+      "export_bottom_up_step1_filtered_csv",
+      params.operatorName,
+      "publisher_name",
+      "step1_filtered",
+      `Exported ${rows.length} Step 1 publisher names using ${params.filters.length} applied filter${params.filters.length === 1 ? "" : "s"}.`,
+    ),
+  ]);
+  await writeStore(store);
+
+  return { fileName, csv, rowCount: rows.length };
 }
 
 export async function updateBottomUpStep1Checked(params: {

@@ -1,4 +1,4 @@
-import type { BottomUpReviewStatus, BottomUpRowDraft } from "@/lib/bottom-up/types";
+import type { BottomUpReviewStatus, BottomUpRowDraft, BottomUpStep1PublisherRow } from "@/lib/bottom-up/types";
 
 type ParsedCsvRow = Record<string, string>;
 
@@ -180,6 +180,33 @@ export function buildBottomUpCsv(rows: BottomUpRowDraft[]) {
     );
 
   return [header, ...body].join("\n");
+}
+
+export function buildBottomUpStep1PublisherCsv(rows: BottomUpStep1PublisherRow[]) {
+  const header = [
+    "publisher_name",
+    "cleaned_publisher_name",
+    "is_in_vn_publisher_list",
+    "is_in_latest_mapping",
+    "is_checked",
+    "publisher_ids",
+    "source_app_rows",
+  ];
+  const body = rows.map((row) =>
+    [
+      row.publisherName,
+      row.cleanedPublisherName,
+      row.isInVnPublisherList ? "TRUE" : "FALSE",
+      row.isInLatestMapping ? "TRUE" : "FALSE",
+      row.isChecked ? "TRUE" : "FALSE",
+      row.publisherIds.join(" | "),
+      String(row.appCount),
+    ]
+      .map(csvEscape)
+      .join(","),
+  );
+
+  return [header.join(","), ...body].join("\n");
 }
 
 export function upsertRowsByPublisherId(existingRows: BottomUpRowDraft[], importedRows: BottomUpRowDraft[]) {

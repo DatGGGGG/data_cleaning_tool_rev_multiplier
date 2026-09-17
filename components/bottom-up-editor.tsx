@@ -893,7 +893,11 @@ export function BottomUpEditor({
           : publisher,
       ),
     );
-    setStatusMessage(`Updated cleaned publisher mapping for ${rawPublisherName}.`);
+    setStatusMessage(
+      normalizedCleanedPublisherName
+        ? `Updated cleaned publisher mapping for ${rawPublisherName}. Click Save Changes to persist it.`
+        : `Cleared cleaned publisher mapping for ${rawPublisherName}. Click Save Changes to persist it.`,
+    );
   }
 
   function addRow() {
@@ -1584,10 +1588,14 @@ export function BottomUpEditor({
                               className="input select-input table-input"
                               value={publisher.cleanedPublisherName}
                               onChange={(event) => updateCleanedPublisherName(publisher.publisherName, event.target.value, publisher.publisherIds)}
-                              disabled={registeredPublisherNameOptions.length === 0}
+                              disabled={registeredPublisherNameOptions.length === 0 && !publisher.cleanedPublisherName}
                             >
                               <option value="">
-                                {registeredPublisherNameOptions.length === 0 ? "No registered publishers found" : "Select registered publisher"}
+                                {publisher.cleanedPublisherName
+                                  ? "Unassigned (clear mapping)"
+                                  : registeredPublisherNameOptions.length === 0
+                                    ? "No registered publishers found"
+                                    : "Unassigned"}
                               </option>
                               {publisher.cleanedPublisherName && !registeredPublisherNameOptions.includes(publisher.cleanedPublisherName) ? (
                                 <option value={publisher.cleanedPublisherName} disabled>

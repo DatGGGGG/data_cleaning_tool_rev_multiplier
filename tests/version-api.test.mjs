@@ -266,6 +266,8 @@ test("bottom-up download preserves the historical multiplier and integrity metad
   assert.equal(downloadResponse.status, 200);
   assert.match(csv, /Example Publisher,1001,Example Publisher Ltd,15/);
   assert.match(csv, /Example Publisher,1002,Example Publisher Mobile,12/);
+  assert.doesNotMatch(csv, /Unmapped Publisher/);
+  assert.equal(csv.split("\n").length - 1, metadata.mappedRowCount);
   assert.equal(Buffer.byteLength(csv, "utf-8"), metadata.csvByteSize);
   assert.equal(checksum, metadata.checksumSha256);
 });

@@ -172,7 +172,7 @@ export function importBottomUpRowsFromCsv(text: string): BottomUpRowDraft[] {
 export function buildBottomUpCsv(rows: BottomUpRowDraft[]) {
   const header = "cleaned_publisher_name,publisher_id,publisher_name,revenue_multiplier";
   const body = rows
-    .filter((row) => row.cleanedPublisherName || row.publisherId || row.publisherName)
+    .filter((row) => row.cleanedPublisherName && row.publisherId && row.publisherName)
     .map((row) =>
       [row.cleanedPublisherName, row.publisherId, row.publisherName, row.revenueMultiplier]
         .map(csvEscape)

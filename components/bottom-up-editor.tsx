@@ -839,21 +839,25 @@ export function BottomUpEditor({
   function updateCleanedPublisherName(rawPublisherName: string, cleanedPublisherName: string, publisherIds: string[] = []) {
     const normalizedRawPublisherName = rawPublisherName.trim();
     const normalizedCleanedPublisherName = cleanedPublisherName.trim();
+    const normalizedRawPublisherKey = normalizedRawPublisherName.toLowerCase();
+    const matchesRawPublisher = (row: BottomUpRowDraft) =>
+      row.publisherName.trim().toLowerCase() === normalizedRawPublisherKey;
     const existingPublisherIds = new Set(
       state.rows
-        .filter((row) => row.publisherName === rawPublisherName)
+        .filter(matchesRawPublisher)
         .map((row) => row.publisherId)
         .filter(Boolean),
     );
-    const nextRows = state.rows.map((row) =>
-        row.publisherName === rawPublisherName
-          ? {
-              ...row,
-              cleanedPublisherName,
-              reviewStatus: cleanedPublisherName.trim() ? row.reviewStatus : "needs_review",
-            }
-          : row,
-    );
+    const nextRows = normalizedCleanedPublisherName
+      ? state.rows.map((row) =>
+          matchesRawPublisher(row)
+            ? {
+                ...row,
+                cleanedPublisherName: normalizedCleanedPublisherName,
+              }
+            : row,
+        )
+      : state.rows.filter((row) => !matchesRawPublisher(row));
 
     if (normalizedCleanedPublisherName) {
       for (const publisherId of publisherIds) {
@@ -866,8 +870,8 @@ export function BottomUpEditor({
             ...createEmptyBottomUpRow(nextRows.length + 1),
             publisherName: rawPublisherName,
             publisherId,
-            cleanedPublisherName,
-            revenueMultiplier: getRegisteredRevenueMultiplier(cleanedPublisherName),
+            cleanedPublisherName: normalizedCleanedPublisherName,
+            revenueMultiplier: getRegisteredRevenueMultiplier(normalizedCleanedPublisherName),
             reviewStatus: "needs_review",
           }),
         );
@@ -881,7 +885,7 @@ export function BottomUpEditor({
         publisher.publisherName === normalizedRawPublisherName
           ? {
               ...publisher,
-              cleanedPublisherName,
+              cleanedPublisherName: normalizedCleanedPublisherName,
               isInLatestMapping: Boolean(normalizedCleanedPublisherName),
               isInVnPublisherList:
                 Boolean(normalizedCleanedPublisherName) &&

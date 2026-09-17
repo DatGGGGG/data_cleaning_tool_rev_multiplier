@@ -1253,11 +1253,17 @@ function makeWorkbenchState(
     typeof options.logLimit === "number" && Number.isFinite(options.logLimit)
       ? Math.max(0, Math.floor(options.logLimit))
       : 24;
+  const step1PublisherNames = new Set(
+    store.publisherCandidates.map((candidate) => candidate.publisherName.trim().toLowerCase()).filter(Boolean),
+  );
+  const visibleRows = store.rows.filter(
+    (row) => row.cleanedPublisherName || !step1PublisherNames.has(row.publisherName.trim().toLowerCase()),
+  );
 
   return {
     datasetId: store.datasetId,
     operatorName,
-    rows: store.rows,
+    rows: visibleRows,
     checkedPublisherNames: [],
     checkedPublisherCount: store.checkedPublisherNames.length,
     appCandidates: store.appCandidates.slice(0, MAX_APP_CANDIDATE_PREVIEW_COUNT),
@@ -1840,11 +1846,13 @@ export async function exportBottomUpCsv(operatorName: string) {
       publisher.revenueMultiplier.trim() || "1",
     ]),
   );
-  const exportRows = store.rows.map((row) => ({
-    ...row,
-    revenueMultiplier:
-      revenueMultiplierByPublisher.get(row.cleanedPublisherName.trim().toLowerCase()) ?? row.revenueMultiplier,
-  }));
+  const exportRows = store.rows
+    .filter((row) => row.cleanedPublisherName && row.publisherId && row.publisherName)
+    .map((row) => ({
+      ...row,
+      revenueMultiplier:
+        revenueMultiplierByPublisher.get(row.cleanedPublisherName.trim().toLowerCase()) ?? row.revenueMultiplier,
+    }));
   const csv = buildBottomUpCsv(exportRows);
   const fileName = `mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_${Date.now()}.csv`;
   const storedPath = path.join(EXPORTS_DIR, fileName);
@@ -1860,7 +1868,7 @@ export async function exportBottomUpCsv(operatorName: string) {
     createdBy: operatorName,
   });
   appendLogs(store, [
-    createLog("export_bottom_up_csv", operatorName, "dataset_export", fileName, `Exported ${store.rows.length} rows.`),
+    createLog("export_bottom_up_csv", operatorName, "dataset_export", fileName, `Exported ${exportRows.length} rows.`),
   ]);
   await writeStore(store);
   return { fileName, csv };

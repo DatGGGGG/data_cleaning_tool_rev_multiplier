@@ -125,9 +125,10 @@ cp .env.production.example .env.production
 ```
 
 Edit `.env.production` with the real `ST_API_KEY`, `STRATEGY_DATA_API_KEY`, and a private
-`SENSORTOWER_REFRESH_TOKEN`. Also set `PORTAL_SERVICE_TOKEN` to the same long random secret configured in the
-VN Market Data Portal backend. Confirm `STRATEGY_DATA_API_BASE_URL` points to the production VN Strategy API. The
-provided default uses `host.docker.internal:8001`, matching the VM port currently used by that API.
+`SENSORTOWER_REFRESH_TOKEN`. Set `PORTAL_SERVICE_TOKEN` to the shared portal/workbench secret and
+`WORKBENCH_SESSION_SECRET` to a different random value of at least 32 characters. Confirm
+`PORTAL_INTERNAL_API_BASE_URL` resolves to the portal API container and `STRATEGY_DATA_API_BASE_URL` points to the
+production VN Strategy API. The provided Strategy API default uses `host.docker.internal:8001`.
 
 Build and start the service:
 
@@ -267,7 +268,7 @@ Keep `.env.production` and the Docker volume backed up. Neither is restored by `
 - build the next workflow for publisher ID + revenue multiplier mapping
 - add background jobs for Sensor Tower enrichment and publisher website crawling
 
-## Mapping Artifact integration safety
+## Portal authentication and Mapping Artifact integration
 
 The **Full Mapping** workspace contains the workbench-side integration for the SensorTower Mapping Artifact API. It is intentionally disabled by default:
 
@@ -276,9 +277,33 @@ MAPPING_ARTIFACT_UI_ENABLED=false
 MAPPING_ARTIFACT_MUTATIONS_ENABLED=false
 ```
 
-The server-side API client supports `http://host.docker.internal:8010`, but the pipeline service token must never be exposed to the browser or stored in workbench settings. Publication, generated-draft commit, activation, artifact metadata, and artifact downloads remain fail-closed until this standalone workbench has a trusted authenticated-principal and RBAC adapter. The editable **Operator** inputs are not authentication.
+The portal launches the workbench with a single-use workspace grant at `/auth/exchange?code=...`. The workbench
+consumes that code server-to-server, issues an HttpOnly signed session, and immediately redirects without retaining
+the code. Direct unauthenticated page access returns `401`; unauthenticated API access returns JSON `401`.
+`/api/health` and `/auth/exchange` are public. State-changing browser requests require a same-origin `Origin` header.
+The existing read-only Top Down and Bottom Up version APIs remain available to the portal only through their
+server-to-server bearer-token validation; their mutation methods still require a workbench session.
 
-Once real authentication is added, configure the service only in the server/container environment:
+The session maps portal roles as follows:
+
+- `viewer`: view and download artifacts
+- `analyst`: viewer access plus publish, generate, and commit
+- `admin`: analyst access plus activate
+
+Configure these server-only values in `.env.production`:
+
+```text
+PORTAL_INTERNAL_API_BASE_URL=http://<portal-api-container>:8000
+PORTAL_SERVICE_TOKEN=<shared-portal-workbench-secret>
+WORKBENCH_SESSION_SECRET=<separate-random-secret-at-least-32-characters>
+WORKBENCH_SESSION_TTL_SECONDS=28800
+```
+
+Never expose the portal secret, session secret, or pipeline service token through `NEXT_PUBLIC_*`, page data,
+browser JavaScript, logs, or API responses. Editable **Operator** inputs are not authentication and are never used
+as Mapping Artifact actors.
+
+After portal exchange, role, CSRF, and API smoke tests pass, configure the pipeline service and enable the workflow:
 
 ```text
 SENSORTOWER_PIPELINE_API_BASE_URL=http://host.docker.internal:8010

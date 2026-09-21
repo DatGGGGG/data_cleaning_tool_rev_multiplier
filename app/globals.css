@@ -116,6 +116,39 @@ textarea {
   white-space: nowrap;
 }
 
+.topbar-user-identity {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.topbar-user-identity strong {
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.topbar-user-identity small {
+  margin-top: 3px;
+  color: var(--text-soft);
+  font-size: 0.7rem;
+  text-transform: capitalize;
+}
+
+.topbar-logout {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 0 4px 4px;
+}
+
+.topbar-logout:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
 .user-badge {
   width: 26px;
   height: 26px;

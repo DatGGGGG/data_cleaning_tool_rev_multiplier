@@ -1,11 +1,14 @@
 import { MappingArtifactWorkbenchError } from "@/lib/mapping-artifacts/errors";
 import type { MappingArtifactReadiness } from "@/lib/mapping-artifacts/types";
+import { getWorkbenchSession, type PortalRole } from "@/lib/auth/session";
 
 export type MappingArtifactCapability = "read" | "publish" | "commit" | "activate";
 
 export type WorkbenchPrincipal = {
   id: string;
+  email: string;
   displayName: string;
+  portalRole: PortalRole;
   roles: string[];
 };
 
@@ -20,13 +23,16 @@ function upstreamConfigured() {
   );
 }
 
-/**
- * The standalone workbench has no production identity provider yet. Keep mutation
- * routes fail-closed until this adapter is replaced by trusted gateway/SSO identity.
- * Never derive an actor from the editable operator field.
- */
-export async function getMappingArtifactPrincipal(_request: Request): Promise<WorkbenchPrincipal | null> {
-  return null;
+export async function getMappingArtifactPrincipal(request: Request): Promise<WorkbenchPrincipal | null> {
+  const session = await getWorkbenchSession(request);
+  if (!session) return null;
+  return {
+    id: session.userId,
+    email: session.email,
+    displayName: session.displayName,
+    portalRole: session.role,
+    roles: [session.role],
+  };
 }
 
 export async function getMappingArtifactReadiness(request: Request): Promise<MappingArtifactReadiness> {
@@ -51,8 +57,8 @@ export async function getMappingArtifactReadiness(request: Request): Promise<Map
     uiEnabled,
     mutationsEnabled,
     authenticated,
-    canPublish: Boolean(uiEnabled && mutationsEnabled && authenticated && configured && principal?.roles.includes("analyst")),
-    canCommit: Boolean(uiEnabled && mutationsEnabled && authenticated && configured && principal?.roles.some((role) => role === "analyst" || role === "reviewer")),
+    canPublish: Boolean(uiEnabled && mutationsEnabled && authenticated && configured && principal?.roles.some((role) => role === "analyst" || role === "admin")),
+    canCommit: Boolean(uiEnabled && mutationsEnabled && authenticated && configured && principal?.roles.some((role) => role === "analyst" || role === "admin")),
     canActivate: Boolean(uiEnabled && mutationsEnabled && authenticated && configured && principal?.roles.includes("admin")),
     upstreamConfigured: configured,
     message,
@@ -76,9 +82,9 @@ export async function requireMappingArtifactCapability(
   }
 
   const authorized =
-    (capability === "read" && principal.roles.some((role) => role === "viewer" || role === "analyst" || role === "reviewer" || role === "admin")) ||
-    (capability === "publish" && principal.roles.includes("analyst")) ||
-    (capability === "commit" && principal.roles.some((role) => role === "analyst" || role === "reviewer")) ||
+    (capability === "read" && principal.roles.some((role) => role === "viewer" || role === "analyst" || role === "admin")) ||
+    (capability === "publish" && principal.roles.some((role) => role === "analyst" || role === "admin")) ||
+    (capability === "commit" && principal.roles.some((role) => role === "analyst" || role === "admin")) ||
     (capability === "activate" && principal.roles.includes("admin"));
   if (!authorized) {
     throw new MappingArtifactWorkbenchError("forbidden", "Your workbench role cannot perform this artifact action.", 403);

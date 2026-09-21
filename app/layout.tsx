@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { headers } from "next/headers";
+import { appApiPath } from "@/lib/app-path";
+import { getMappingArtifactPrincipal } from "@/lib/mapping-artifacts/auth";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -7,11 +10,15 @@ export const metadata: Metadata = {
   description: "Operator workbench for manual Sensor Tower data-cleaning inputs.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const requestHeaders = await headers();
+  const principal = await getMappingArtifactPrincipal(new Request("http://workbench.internal", { headers: requestHeaders }));
+  const initials = principal?.displayName.trim().slice(0, 1).toUpperCase() || "?";
+
   return (
     <html lang="en">
       <body>
@@ -46,8 +53,12 @@ export default function RootLayout({
               </Link>
             </nav>
             <div className="topbar-user">
-              <span className="user-badge">D</span>
-              <span>Data Cleaning Ops</span>
+              <span className="user-badge">{initials}</span>
+              <span className="topbar-user-identity">
+                <strong>{principal?.displayName || "Not signed in"}</strong>
+                {principal ? <small>{principal.portalRole}</small> : null}
+              </span>
+              {principal ? <form action={appApiPath("/auth/logout")} method="post"><button className="topbar-logout" type="submit">Logout</button></form> : null}
             </div>
           </header>
           <main className="page-frame">{children}</main>

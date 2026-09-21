@@ -180,6 +180,9 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
         <Link href="/bottom-up" className="button button-secondary">
           Open Bottom Up Mapping
         </Link>
+        <Link href="/full-mapping" className="button button-secondary">
+          Open Full Mapping
+        </Link>
         <Link href="/publisher-management" className="button button-secondary">
           Manage Publishers
         </Link>

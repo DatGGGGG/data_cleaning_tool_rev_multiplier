@@ -1257,6 +1257,9 @@ export function BottomUpEditor({
         <button type="button" className="button button-secondary" onClick={() => void exportCsv()} disabled={isBusy}>
           Export CSV
         </button>
+        <Link className="button button-secondary" href="/full-mapping">
+          Open Full Mapping
+        </Link>
         <label className="field-label" htmlFor="bottom-up-operator">
           Operator
         </label>

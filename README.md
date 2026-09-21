@@ -266,3 +266,26 @@ Keep `.env.production` and the Docker volume backed up. Neither is restored by `
 - move raw CSV uploads and flattened exports from filesystem storage to object storage
 - build the next workflow for publisher ID + revenue multiplier mapping
 - add background jobs for Sensor Tower enrichment and publisher website crawling
+
+## Mapping Artifact integration safety
+
+The **Full Mapping** workspace contains the workbench-side integration for the SensorTower Mapping Artifact API. It is intentionally disabled by default:
+
+```text
+MAPPING_ARTIFACT_UI_ENABLED=false
+MAPPING_ARTIFACT_MUTATIONS_ENABLED=false
+```
+
+The server-side API client supports `http://host.docker.internal:8010`, but the pipeline service token must never be exposed to the browser or stored in workbench settings. Publication, generated-draft commit, activation, artifact metadata, and artifact downloads remain fail-closed until this standalone workbench has a trusted authenticated-principal and RBAC adapter. The editable **Operator** inputs are not authentication.
+
+Once real authentication is added, configure the service only in the server/container environment:
+
+```text
+SENSORTOWER_PIPELINE_API_BASE_URL=http://host.docker.internal:8010
+SENSORTOWER_PIPELINE_API_SERVICE_TOKEN=<server-only-secret>
+SENSORTOWER_PIPELINE_API_TIMEOUT_MS=30000
+MAPPING_ARTIFACT_UI_ENABLED=true
+MAPPING_ARTIFACT_MUTATIONS_ENABLED=true
+```
+
+Only immutable saved Top Down and Bottom Up versions may be published. The Full Mapping page keeps Full generation, review, commit, and explicit activation separate.

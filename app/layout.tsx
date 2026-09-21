@@ -29,6 +29,9 @@ export default function RootLayout({
               <Link href="/bottom-up" className="topbar-link">
                 Bottom Up Mapping
               </Link>
+              <Link href="/full-mapping" className="topbar-link">
+                Full Mapping
+              </Link>
               <Link href="/publisher-management" className="topbar-link">
                 Publisher Management
               </Link>

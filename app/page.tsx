@@ -12,6 +12,16 @@ export default async function HomePage() {
     flattenedRowCount: 0,
     needsReviewCount: 0,
     versions: [],
+    versionFreshness: {
+      hasUnversionedChanges: false,
+      currentChecksumSha256: "",
+      currentFlattenedAppCount: 0,
+      latestVersionId: null,
+      latestVersionLabel: null,
+      latestVersionCreatedAt: null,
+      latestVersionChecksumSha256: null,
+      latestVersionFlattenedAppCount: null,
+    },
     logs: [],
   };
 

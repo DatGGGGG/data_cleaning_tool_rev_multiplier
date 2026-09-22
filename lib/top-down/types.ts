@@ -94,11 +94,23 @@ export type TopDownVersionMetadata = TopDownVersionSnapshot & {
   flattenedAppCount: number;
 };
 
+export type TopDownVersionFreshness = {
+  hasUnversionedChanges: boolean;
+  currentChecksumSha256: string;
+  currentFlattenedAppCount: number;
+  latestVersionId: string | null;
+  latestVersionLabel: string | null;
+  latestVersionCreatedAt: string | null;
+  latestVersionChecksumSha256: string | null;
+  latestVersionFlattenedAppCount: number | null;
+};
+
 export type TopDownWorkbenchState = {
   datasetId: string;
   operatorName: string;
   publishers: PublisherSheet[];
   versions: TopDownVersionSnapshot[];
+  versionFreshness: TopDownVersionFreshness;
   logs: ActivityLogEntry[];
 };
 
@@ -121,6 +133,7 @@ export type TopDownOverviewState = {
   flattenedRowCount: number;
   needsReviewCount: number;
   versions: TopDownVersionSnapshot[];
+  versionFreshness: TopDownVersionFreshness;
   logs: ActivityLogEntry[];
 };
 

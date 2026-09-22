@@ -374,6 +374,7 @@ export function PublisherGamesEditor({ initialState, publisherKey }: PublisherGa
         : 0,
     [selectedPublisher],
   );
+  const requiresNewVersion = !hasUnsavedChanges && state.versionFreshness.hasUnversionedChanges;
 
   function sortRowsForDisplay(rows: PublisherRowDraft[]) {
     if (!sortField || !sortDirection) {
@@ -1525,9 +1526,21 @@ export function PublisherGamesEditor({ initialState, publisherKey }: PublisherGa
         <div className="banner-meta">
           <div className="meta-pill">{selectedPublisher.rows.length} rows</div>
           <div className="meta-pill">{flattenedCount} flattened apps</div>
-          <div className="meta-pill">{hasUnsavedChanges ? "Unsaved changes" : "Saved"}</div>
+          <div className={`meta-pill${hasUnsavedChanges || requiresNewVersion ? " meta-pill-warning" : ""}`}>
+            {hasUnsavedChanges ? "Unsaved changes" : requiresNewVersion ? "Version update required" : "Saved and versioned"}
+          </div>
         </div>
       </section>
+
+      {requiresNewVersion ? (
+        <section className="version-freshness-warning" role="status">
+          <div>
+            <strong>Working draft saved, but not versioned</strong>
+            <p>These changes will not appear in Full Mapping until a new Top Down version is saved from the overview.</p>
+          </div>
+          <Link className="button button-primary button-inline" href="/">Return to Overview</Link>
+        </section>
+      ) : null}
 
       <section className="action-strip">
         <Link className="button button-secondary" href="/">

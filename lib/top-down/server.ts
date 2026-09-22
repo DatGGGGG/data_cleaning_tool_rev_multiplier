@@ -12,6 +12,7 @@ import type {
   TopDownOverviewState,
   TopDownPublisherRegistryEntry,
   TopDownVersionMetadata,
+  TopDownVersionFreshness,
   TopDownVersionSnapshot,
   TopDownWorkbenchState,
 } from "@/lib/top-down/types";
@@ -614,7 +615,34 @@ function makeWorkbenchState(
       createdBy: version.createdBy,
       publisherCount: version.publisherCount,
     })),
+    versionFreshness: getTopDownVersionFreshnessFromStore(store),
     logs: store.logs.slice(0, logLimit),
+  };
+}
+
+function getTopDownCsvSnapshot(publishers: PublisherSheet[]) {
+  const flattenedRows = flattenPublisherRows(publishers);
+  const csv = buildFlattenedCsv(flattenedRows);
+  return {
+    flattenedAppCount: flattenedRows.length,
+    checksumSha256: getCsvIntegrity(csv).checksumSha256,
+  };
+}
+
+function getTopDownVersionFreshnessFromStore(store: PersistedStore): TopDownVersionFreshness {
+  const current = getTopDownCsvSnapshot(store.publishers);
+  const latestVersion = store.versions[0] ?? null;
+  const latest = latestVersion ? getTopDownCsvSnapshot(latestVersion.publishers) : null;
+
+  return {
+    hasUnversionedChanges: !latest || current.checksumSha256 !== latest.checksumSha256,
+    currentChecksumSha256: current.checksumSha256,
+    currentFlattenedAppCount: current.flattenedAppCount,
+    latestVersionId: latestVersion?.id ?? null,
+    latestVersionLabel: latestVersion?.label ?? null,
+    latestVersionCreatedAt: latestVersion?.createdAt ?? null,
+    latestVersionChecksumSha256: latest?.checksumSha256 ?? null,
+    latestVersionFlattenedAppCount: latest?.flattenedAppCount ?? null,
   };
 }
 
@@ -664,6 +692,7 @@ function makeOverviewState(
       createdBy: version.createdBy,
       publisherCount: version.publisherCount,
     })),
+    versionFreshness: getTopDownVersionFreshnessFromStore(store),
     logs: store.logs.slice(0, logLimit),
   };
 }
@@ -901,6 +930,11 @@ export async function getTopDownOverviewState(
   ensureAutoRefreshSchedulerStarted();
   const store = await readStore();
   return makeOverviewState(store, operatorName, options);
+}
+
+export async function getTopDownVersionFreshness(): Promise<TopDownVersionFreshness> {
+  ensureAutoRefreshSchedulerStarted();
+  return getTopDownVersionFreshnessFromStore(await readStore());
 }
 
 export async function getTopDownPublisherRegistry(): Promise<TopDownPublisherRegistryEntry[]> {

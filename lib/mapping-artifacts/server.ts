@@ -21,7 +21,7 @@ import {
 } from "@/lib/mapping-artifacts/store";
 import type { MappingArtifactType } from "@/lib/mapping-artifacts/types";
 import { exportBottomUpVersionCsv, listBottomUpVersions } from "@/lib/bottom-up/server";
-import { exportTopDownVersionCsv, listTopDownVersions } from "@/lib/top-down/server";
+import { exportTopDownVersionCsv, getTopDownVersionFreshness, listTopDownVersions } from "@/lib/top-down/server";
 import type { WorkbenchPrincipal } from "@/lib/mapping-artifacts/auth";
 
 function checksum(csv: string) {
@@ -43,12 +43,13 @@ function requireNonemptyCsv(csv: string, workflow: string) {
 }
 
 export async function getMappingArtifactDashboard() {
-  const [local, topDownVersions, bottomUpVersions] = await Promise.all([
+  const [local, topDownVersions, bottomUpVersions, topDownVersionFreshness] = await Promise.all([
     readMappingArtifactStore(),
     listTopDownVersions(),
     listBottomUpVersions(),
+    getTopDownVersionFreshness(),
   ]);
-  return { local, topDownVersions, bottomUpVersions };
+  return { local, topDownVersions, bottomUpVersions, topDownVersionFreshness };
 }
 
 export async function getRemoteArtifactCatalog(filters: { type?: MappingArtifactType; status?: string } = {}) {

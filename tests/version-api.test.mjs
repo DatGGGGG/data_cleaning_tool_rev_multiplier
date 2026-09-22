@@ -96,6 +96,7 @@ let topDownVersionsRoute;
 let topDownDownloadRoute;
 let bottomUpVersionsRoute;
 let bottomUpDownloadRoute;
+let topDownServer;
 
 function request(pathname, token = SERVICE_TOKEN) {
   const headers = token === null ? {} : { Authorization: `Bearer ${token}` };
@@ -174,6 +175,7 @@ before(async () => {
   topDownDownloadRoute = await import("../app/api/top-down/versions/[versionId]/download/route.ts");
   bottomUpVersionsRoute = await import("../app/api/bottom-up/versions/route.ts");
   bottomUpDownloadRoute = await import("../app/api/bottom-up/versions/[versionId]/download/route.ts");
+  topDownServer = await import("../lib/top-down/server.ts");
 });
 
 after(async () => {
@@ -323,4 +325,27 @@ test("existing version creation endpoints continue working", async () => {
   assert.equal(bottomUpResponse.status, 200);
   assert.equal(JSON.parse(await readFile(topDownStorePath, "utf-8")).versions.length, 2);
   assert.equal(JSON.parse(await readFile(bottomUpStorePath, "utf-8")).versions.length, 2);
+});
+
+test("Top Down freshness warns until a working mapping change is captured in a new version", async () => {
+  const cleanBeforeChange = await topDownServer.getTopDownVersionFreshness();
+  assert.equal(cleanBeforeChange.hasUnversionedChanges, false);
+
+  const currentState = await topDownServer.getTopDownWorkbenchState("Freshness Test");
+  const changedPublishers = structuredClone(currentState.publishers);
+  changedPublishers[0].rows[0].gameName = "Example Game Updated";
+
+  const dirtyState = await topDownServer.saveTopDownPublishers(changedPublishers, "Freshness Test");
+  assert.equal(dirtyState.versionFreshness.hasUnversionedChanges, true);
+  assert.notEqual(
+    dirtyState.versionFreshness.currentChecksumSha256,
+    dirtyState.versionFreshness.latestVersionChecksumSha256,
+  );
+
+  const versionedState = await topDownServer.createTopDownVersion("Freshness Test");
+  assert.equal(versionedState.versionFreshness.hasUnversionedChanges, false);
+  assert.equal(
+    versionedState.versionFreshness.currentChecksumSha256,
+    versionedState.versionFreshness.latestVersionChecksumSha256,
+  );
 });

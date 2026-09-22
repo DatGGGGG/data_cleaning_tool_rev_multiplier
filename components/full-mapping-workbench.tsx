@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { appApiPath } from "@/lib/app-path";
 import type { BottomUpVersionMetadata } from "@/lib/bottom-up/types";
-import type { TopDownVersionMetadata } from "@/lib/top-down/types";
+import type { TopDownVersionFreshness, TopDownVersionMetadata } from "@/lib/top-down/types";
 import {
   activeFullEntry,
   activationConfirmationMessage,
@@ -21,7 +22,11 @@ import type {
   MappingArtifactReadiness,
 } from "@/lib/mapping-artifacts/types";
 
-type Props = { topDownVersions: TopDownVersionMetadata[]; bottomUpVersions: BottomUpVersionMetadata[] };
+type Props = {
+  topDownVersions: TopDownVersionMetadata[];
+  bottomUpVersions: BottomUpVersionMetadata[];
+  topDownVersionFreshness: TopDownVersionFreshness;
+};
 type CatalogResponse = { artifacts: MappingArtifact[] };
 
 function short(value: string) { return value.length > 12 ? `${value.slice(0, 12)}…` : value; }
@@ -33,7 +38,7 @@ function sourceDescription(source: FullMappingLineageSource) {
   return "Not recorded";
 }
 
-export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Props) {
+export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDownVersionFreshness }: Props) {
   const [readiness, setReadiness] = useState<MappingArtifactReadiness | null>(null);
   const [artifacts, setArtifacts] = useState<MappingArtifact[]>([]);
   const [activeState, setActiveState] = useState<MappingArtifactActiveState | null>(null);
@@ -198,6 +203,7 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Prop
 
     <section className="content-grid">
       <div className="surface-card"><div className="section-heading"><div><h2>1. Publish saved source versions</h2><p>Only immutable saved versions can be sent to SensorTower. Local CSV export alone does not publish anything.</p></div></div>
+        {topDownVersionFreshness.hasUnversionedChanges ? <div className="version-freshness-warning" role="status"><div><strong>Top Down has newer working changes</strong><p>The saved versions below do not contain the latest Top Down edits. Save a new version before publishing unless you intentionally need an older snapshot.</p></div><Link className="button button-primary button-inline" href="/">Return to Top Down</Link></div> : null}
         <h3>Top Down saved versions</h3><div className="list-stack">{topDownVersions.slice(0, 6).map((version) => <div className="list-card" key={version.id}><strong>{version.label}</strong><p>{version.flattenedAppCount} flattened apps · {short(version.checksumSha256)}</p><button className="button button-secondary" type="button" disabled={!canPublish} onClick={() => void publish("top-down", version.id)}>Publish Saved Version</button></div>)}{topDownVersions.length === 0 ? <p className="muted-text">Save a Top Down version first.</p> : null}</div>
         <h3>Bottom Up saved versions</h3><div className="list-stack">{bottomUpVersions.slice(0, 6).map((version) => <div className="list-card" key={version.id}><strong>{version.label}</strong><p>{version.mappedRowCount} mapped rows · {short(version.checksumSha256)}</p><button className="button button-secondary" type="button" disabled={!canPublish} onClick={() => void publish("bottom-up", version.id)}>Publish Saved Version</button></div>)}{bottomUpVersions.length === 0 ? <p className="muted-text">Save a Bottom Up version first.</p> : null}</div>
       </div>

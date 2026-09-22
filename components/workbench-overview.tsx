@@ -30,6 +30,7 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
 
   const latestLogs: ActivityLogEntry[] = state.logs.slice(0, 8);
   const latestVersions: TopDownVersionSnapshot[] = state.versions.slice(0, 6);
+  const requiresNewVersion = state.versionFreshness.hasUnversionedChanges;
 
   useEffect(() => {
     void reloadOverview();
@@ -164,7 +165,7 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
 
       <section className="action-strip">
         <button type="button" className="button button-primary" onClick={() => void saveVersion()} disabled={isBusy}>
-          Save Version
+          {requiresNewVersion ? "Save New Version" : "Save Version"}
         </button>
         <button
           type="button"
@@ -188,6 +189,22 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
         </Link>
         <div className="status-inline">{isBusy ? "Working..." : statusMessage}</div>
       </section>
+
+      {requiresNewVersion ? (
+        <section className="version-freshness-warning" role="status">
+          <div>
+            <strong>Top Down version update required</strong>
+            <p>
+              The working mapping has changes that are not included in a saved version. Full Mapping only sees saved Top Down versions.
+            </p>
+          </div>
+          <button type="button" className="button button-primary button-inline" onClick={() => void saveVersion()} disabled={isBusy}>
+            Save New Version
+          </button>
+        </section>
+      ) : (
+        <p className="version-freshness-current" role="status">Latest saved Top Down version matches the working mapping.</p>
+      )}
 
       <section className="stats-grid">
         <article className="stat-card">

@@ -811,6 +811,43 @@ textarea {
   color: var(--text-muted);
 }
 
+.version-freshness-warning {
+  align-items: center;
+  background: #fff8e8;
+  border: 1px solid #e6c876;
+  border-radius: var(--radius-sm);
+  color: #674c14;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+}
+
+.version-freshness-warning strong {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.version-freshness-warning p {
+  color: #765b20;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  margin: 4px 0 0;
+}
+
+.version-freshness-current {
+  color: #34734b;
+  font-size: 0.84rem;
+  margin: 0;
+}
+
+.meta-pill-warning {
+  background: #fff8e8;
+  border-color: #e6c876;
+  color: #765b20;
+}
+
 .list-card {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -2196,6 +2233,11 @@ textarea {
   }
 
   .artifact-registry-card-heading {
+    flex-direction: column;
+  }
+
+  .version-freshness-warning {
+    align-items: flex-start;
     flex-direction: column;
   }
 }

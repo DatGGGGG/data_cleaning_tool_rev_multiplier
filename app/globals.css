@@ -1873,24 +1873,60 @@ textarea {
 .artifact-summary-grid {
   display: grid;
   gap: 14px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(184px, 1fr));
 }
 
-.artifact-summary-grid .metric-card {
-  min-height: 116px;
+.artifact-summary-card {
+  align-content: start;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #cad8e5;
+  border-top: 3px solid #7fa7c9;
+  border-radius: 10px;
+  box-shadow: 0 5px 14px rgba(31, 74, 113, 0.05);
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 14px 16px 15px;
 }
 
-.artifact-summary-grid .metric-card small {
+.artifact-summary-label {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.artifact-summary-count {
+  color: var(--ink);
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.artifact-summary-active-id {
+  color: var(--ink);
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.94rem;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-summary-card small {
   color: var(--text-muted);
   display: block;
   font-size: 0.78rem;
   line-height: 1.35;
-  margin-top: 7px;
 }
 
 .artifact-active-summary {
-  background: #f4f8fc;
+  background: #f0f7fd;
   border-color: #aac6df;
+  border-top-color: #2c78bd;
 }
 
 .registry-filter-bar {
@@ -2108,10 +2144,6 @@ textarea {
     margin-left: 0;
   }
 
-  .artifact-summary-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .artifact-registry-metadata {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2157,6 +2189,10 @@ textarea {
   .artifact-registry-metadata,
   .artifact-registry-details dl {
     grid-template-columns: 1fr;
+  }
+
+  .artifact-summary-card {
+    padding: 13px 14px;
   }
 
   .artifact-registry-card-heading {

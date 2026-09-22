@@ -119,8 +119,15 @@ export function MappingArtifactRegistry() {
     </section>
 
     <section className="artifact-summary-grid" aria-label="Committed artifact counts">
-      {MAPPING_ARTIFACT_TYPES.map((type) => <div className="metric-card" key={type}><span>{artifactTypeLabel(type)}</span><strong>{counts[type]}</strong></div>)}
-      <div className="metric-card artifact-active-summary"><span>Active Full Mapping</span><strong>{activeFull ? short(activeFull.artifact.id) : "None"}</strong><small>{activeFull ? `${activeFull.artifact.row_count} rows · activated ${date(activeFull.activated_at)}` : "Activate a committed Full Mapping as an admin."}</small></div>
+      {MAPPING_ARTIFACT_TYPES.map((type) => <article className="artifact-summary-card" key={type}>
+        <span className="artifact-summary-label">{artifactTypeLabel(type)}</span>
+        <strong className="artifact-summary-count">{counts[type]}</strong>
+      </article>)}
+      <article className="artifact-summary-card artifact-active-summary">
+        <span className="artifact-summary-label">Active Full Mapping</span>
+        <strong className="artifact-summary-active-id" title={activeFull?.artifact.id || undefined}>{activeFull ? short(activeFull.artifact.id) : "None"}</strong>
+        <small>{activeFull ? `${activeFull.artifact.row_count} rows · activated ${date(activeFull.activated_at)}` : "Activate a committed Full Mapping as an admin."}</small>
+      </article>
     </section>
 
     <section className="surface-card">

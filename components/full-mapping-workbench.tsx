@@ -6,11 +6,12 @@ import type { BottomUpVersionMetadata } from "@/lib/bottom-up/types";
 import type { TopDownVersionMetadata } from "@/lib/top-down/types";
 import {
   activeFullEntry,
+  activationConfirmationMessage,
   committedFullArtifacts,
   isActiveFullArtifact,
   resolveFullMappingLineage,
   type FullMappingLineageSource,
-} from "@/lib/mapping-artifacts/full-catalog";
+} from "@/lib/mapping-artifacts/catalog";
 import type {
   MappingArtifact,
   MappingArtifactActivationResponse,
@@ -166,17 +167,7 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Prop
   }
 
   async function activate(artifact: MappingArtifact) {
-    const lineage = resolveFullMappingLineage(artifact, artifacts);
-    const confirmation = [
-      "Activate this committed Full Mapping?",
-      `Current active: ${activeFull?.artifact.id ?? "none"}`,
-      `Candidate: ${artifact.id}`,
-      `Rows: ${artifact.row_count}`,
-      `Checksum: ${artifact.checksum_sha256}`,
-      `Apps + Publisher IDs source: ${lineage.enrichedTopDown.id ?? "not recorded"}`,
-      `Bottom Up source: ${lineage.bottomUp.id ?? "not recorded"}`,
-      "This affects future artifact-mode staging runs only and does not start a pipeline.",
-    ].join("\n");
+    const confirmation = activationConfirmationMessage(artifact, activeFull, artifacts);
     if (!window.confirm(confirmation)) return;
     setActivatingArtifactId(artifact.id);
     try {

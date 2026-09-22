@@ -29,6 +29,29 @@ function expectedOrigin(request: NextRequest) {
   return `${protocol}://${host}`;
 }
 
+function isHttpOrigin(value: string | null) {
+  if (!value) return false;
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.origin === value;
+  } catch {
+    return false;
+  }
+}
+
+function isSameOriginMutation(request: NextRequest) {
+  const origin = request.headers.get("origin");
+  if (!isHttpOrigin(origin)) return false;
+
+  if (origin === expectedOrigin(request)) return true;
+
+  // Reverse proxies may expose an internal scheme/host to Next.js even when the
+  // browser is posting back to the public origin. Sec-Fetch-Site is a forbidden
+  // browser header, so page JavaScript cannot forge "same-origin" for a
+  // cross-site request. Keep requiring Origin as well for non-browser callers.
+  return request.headers.get("sec-fetch-site")?.toLowerCase() === "same-origin";
+}
+
 function unauthorized(pathname: string) {
   if (pathname.startsWith("/api/")) {
     return NextResponse.json({ error: { code: "authentication_required", message: "Launch the workbench from the portal." } }, { status: 401 });
@@ -55,8 +78,7 @@ export async function middleware(request: NextRequest) {
   if (!session) return unauthorized(pathname);
 
   if (isStateChanging(request.method)) {
-    const origin = request.headers.get("origin");
-    if (!origin || origin !== expectedOrigin(request)) return csrfRejected(pathname);
+    if (!isSameOriginMutation(request)) return csrfRejected(pathname);
   }
   return NextResponse.next();
 }

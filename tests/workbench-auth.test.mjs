@@ -192,6 +192,30 @@ test("middleware protects pages and APIs and enforces same-origin mutations", as
       headers: { cookie: header, origin: "https://market-data.garena.vn" },
     }));
     assert.equal(sameOrigin.status, 200);
+
+    const proxiedSameOrigin = await middleware(new NextRequest("http://0.0.0.0:3000/cleaning/sensortower/api/top-down/sensortower/resolve", {
+      method: "POST",
+      headers: {
+        cookie: header,
+        origin: "https://market-data.garena.vn",
+        "x-forwarded-host": "sensortower-cleaning-workbench:3000",
+        "x-forwarded-proto": "http",
+        "sec-fetch-site": "same-origin",
+      },
+    }));
+    assert.equal(proxiedSameOrigin.status, 200);
+
+    const proxiedCrossSite = await middleware(new NextRequest("http://0.0.0.0:3000/cleaning/sensortower/api/top-down/sensortower/resolve", {
+      method: "POST",
+      headers: {
+        cookie: header,
+        origin: "https://evil.example",
+        "x-forwarded-host": "sensortower-cleaning-workbench:3000",
+        "x-forwarded-proto": "http",
+        "sec-fetch-site": "cross-site",
+      },
+    }));
+    assert.equal(proxiedCrossSite.status, 403);
   } finally {
     restoreEnvironment(original);
   }

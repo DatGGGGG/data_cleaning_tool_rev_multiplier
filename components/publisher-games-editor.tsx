@@ -52,6 +52,7 @@ type WorkbenchResponse = {
 };
 
 type BatchAction = "update_status" | "fetch_sensortower" | "delete_rows";
+type SensorTowerCompletedStatus = "resolved" | "empty" | "failed";
 type SortDirection = "asc" | "desc";
 type SortField =
   | "ordinal"
@@ -89,6 +90,26 @@ function createFilterRule(field: FilterField = "all_fields", value = ""): Filter
     field,
     value,
   };
+}
+
+function isSensorTowerCompletedStatus(value: unknown): value is SensorTowerCompletedStatus {
+  return value === "resolved" || value === "empty" || value === "failed";
+}
+
+function sensorTowerResponseError(payload: unknown) {
+  if (!payload || typeof payload !== "object") return "SensorTower request failed.";
+  const candidate = payload as { errorMessage?: unknown; error?: unknown };
+  if (typeof candidate.errorMessage === "string" && candidate.errorMessage.trim()) {
+    return candidate.errorMessage;
+  }
+  if (typeof candidate.error === "string" && candidate.error.trim()) {
+    return candidate.error;
+  }
+  if (candidate.error && typeof candidate.error === "object") {
+    const message = (candidate.error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return "SensorTower request failed.";
 }
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
@@ -1216,7 +1237,13 @@ export function PublisherGamesEditor({ initialState, publisherKey }: PublisherGa
         }),
       });
 
-      const payload = (await response.json()) as SensorTowerResolveResponse;
+      const payload = (await response.json().catch(() => null)) as SensorTowerResolveResponse | null;
+      if (!response.ok) {
+        throw new Error(sensorTowerResponseError(payload));
+      }
+      if (!payload || !isSensorTowerCompletedStatus(payload.status)) {
+        throw new Error("The server returned an invalid SensorTower response. Please refresh and try again.");
+      }
       const nextResolution = {
         status: payload.status,
         unifiedAppId: payload.unifiedAppId,

@@ -84,9 +84,13 @@ test("portal workspace grant exchange creates a secure bounded session and drops
       return Response.json({ user_id: 123, email: "user@garena.com", display_name: "User Name", role: "admin" });
     };
     const { GET } = await import("../app/auth/exchange/route.ts");
-    const response = await GET(new Request("https://market-data.garena.vn/cleaning/sensortower/auth/exchange?code=single-use-code"));
+    const response = await GET(new Request("http://0.0.0.0:3000/cleaning/sensortower/auth/exchange?code=single-use-code", {
+      headers: { host: "attacker.example" },
+    }));
     assert.equal(response.status, 303);
-    assert.equal(response.headers.get("location"), "https://market-data.garena.vn/cleaning/sensortower/full-mapping");
+    const location = response.headers.get("location") || "";
+    assert.equal(location, "/cleaning/sensortower/full-mapping");
+    assert.doesNotMatch(location, /0\.0\.0\.0|localhost|attacker\.example|^[a-z][a-z0-9+.-]*:\/\//i);
     const cookie = response.headers.get("set-cookie") || "";
     assert.match(cookie, /sensortower_workbench_session=/);
     assert.match(cookie, /HttpOnly/i);
@@ -193,14 +197,20 @@ test("middleware protects pages and APIs and enforces same-origin mutations", as
   }
 });
 
-test("logout expires the session cookie and health remains public", async () => {
+test("logout expires the session cookie, redirects relatively, and health remains public", async () => {
   const original = snapshotEnvironment();
   try {
     configureSession();
     process.env.NODE_ENV = "production";
     const { POST } = await import("../app/auth/logout/route.ts");
-    const logout = await POST(new Request("https://market-data.garena.vn/cleaning/sensortower/auth/logout", { method: "POST" }));
+    const logout = await POST(new Request("http://0.0.0.0:3000/cleaning/sensortower/auth/logout", {
+      method: "POST",
+      headers: { host: "attacker.example" },
+    }));
     assert.equal(logout.status, 303);
+    const location = logout.headers.get("location") || "";
+    assert.equal(location, "/cleaning/sensortower");
+    assert.doesNotMatch(location, /0\.0\.0\.0|localhost|attacker\.example|^[a-z][a-z0-9+.-]*:\/\//i);
     assert.match(logout.headers.get("set-cookie") || "", /Max-Age=0/);
     const { GET } = await import("../app/api/health/route.ts");
     const health = await GET();

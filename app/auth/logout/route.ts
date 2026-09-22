@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 import { sessionCookiePath, WORKBENCH_SESSION_COOKIE, workbenchBasePath } from "@/lib/auth/session";
 
-export async function POST(request: Request) {
-  const response = NextResponse.redirect(new URL(workbenchBasePath() || "/", request.url), 303);
+export async function POST() {
+  const response = new NextResponse(null, {
+    status: 303,
+    headers: {
+      Location: workbenchBasePath() || "/",
+      "Cache-Control": "no-store",
+    },
+  });
   response.cookies.set({
     name: WORKBENCH_SESSION_COOKIE,
     value: "",

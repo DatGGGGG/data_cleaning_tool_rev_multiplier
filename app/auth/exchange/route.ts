@@ -23,8 +23,13 @@ export async function GET(request: Request) {
   try {
     const identity = await consumeWorkspaceGrant(code);
     const session = await createSignedSession(identity);
-    const response = NextResponse.redirect(new URL(`${workbenchBasePath()}/full-mapping`, request.url), 303);
-    response.headers.set("Cache-Control", "no-store");
+    const response = new NextResponse(null, {
+      status: 303,
+      headers: {
+        Location: `${workbenchBasePath()}/full-mapping`,
+        "Cache-Control": "no-store",
+      },
+    });
     response.cookies.set({
       name: WORKBENCH_SESSION_COOKIE,
       value: session,

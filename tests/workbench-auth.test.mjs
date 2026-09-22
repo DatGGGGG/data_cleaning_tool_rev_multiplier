@@ -151,7 +151,8 @@ test("middleware protects pages and APIs and enforces same-origin mutations", as
   const original = snapshotEnvironment();
   try {
     configureSession();
-    const { middleware } = await import("../middleware.ts");
+    const { config, middleware } = await import("../middleware.ts");
+    assert.ok(config.matcher.includes("/"), "the exact configured base-path root must be matched");
     const publicHealth = await middleware(new NextRequest("https://market-data.garena.vn/cleaning/sensortower/api/health"));
     assert.equal(publicHealth.status, 200);
 
@@ -168,6 +169,8 @@ test("middleware protects pages and APIs and enforces same-origin mutations", as
     assert.equal(deniedApi.status, 401);
     const deniedPage = await middleware(new NextRequest("https://market-data.garena.vn/cleaning/sensortower/full-mapping"));
     assert.equal(deniedPage.status, 401);
+    const deniedBasePathRoot = await middleware(new NextRequest("https://market-data.garena.vn/cleaning/sensortower"));
+    assert.equal(deniedBasePathRoot.status, 401);
 
     const { header } = await sessionCookie("analyst");
     const missingOrigin = await middleware(new NextRequest("https://market-data.garena.vn/cleaning/sensortower/api/settings", {

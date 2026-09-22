@@ -62,5 +62,7 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image).*)"],
+  // The explicit root matcher is required when Next.js applies basePath. Without
+  // it, the exact `/cleaning/sensortower` URL can bypass the catch-all matcher.
+  matcher: ["/", "/((?!_next/static|_next/image).*)"],
 };

@@ -137,7 +137,15 @@ export async function commitMappingArtifact(artifactId: string, principal: Workb
 }
 
 export async function activateFullMappingArtifact(artifactId: string, principal: WorkbenchPrincipal) {
+  const before = await getRemoteActiveArtifacts();
+  const previousArtifactId = before.active.full?.artifact.id ?? null;
   const result = await activateRemoteFullArtifact(artifactId, principal.displayName);
-  await mutateMappingArtifactStore((store) => store.activity.unshift(createIntegrationLog("full_mapping_activated", principal.displayName, "mapping_artifact", artifactId, "Activated committed Full Mapping artifact.")));
+  await mutateMappingArtifactStore((store) => store.activity.unshift(createIntegrationLog(
+    "full_mapping_activated",
+    principal.displayName,
+    "mapping_artifact",
+    artifactId,
+    `Activated committed Full Mapping artifact ${artifactId}; previous active artifact: ${previousArtifactId ?? "none"}.`,
+  )));
   return result;
 }

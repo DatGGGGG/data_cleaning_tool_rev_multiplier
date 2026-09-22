@@ -4,19 +4,38 @@ import { useEffect, useMemo, useState } from "react";
 import { appApiPath } from "@/lib/app-path";
 import type { BottomUpVersionMetadata } from "@/lib/bottom-up/types";
 import type { TopDownVersionMetadata } from "@/lib/top-down/types";
-import type { MappingArtifact, MappingArtifactJob, MappingArtifactReadiness } from "@/lib/mapping-artifacts/types";
+import {
+  activeFullEntry,
+  committedFullArtifacts,
+  isActiveFullArtifact,
+  resolveFullMappingLineage,
+  type FullMappingLineageSource,
+} from "@/lib/mapping-artifacts/full-catalog";
+import type {
+  MappingArtifact,
+  MappingArtifactActivationResponse,
+  MappingArtifactActiveResponse,
+  MappingArtifactActiveState,
+  MappingArtifactJob,
+  MappingArtifactReadiness,
+} from "@/lib/mapping-artifacts/types";
 
 type Props = { topDownVersions: TopDownVersionMetadata[]; bottomUpVersions: BottomUpVersionMetadata[] };
 type CatalogResponse = { artifacts: MappingArtifact[] };
-type ActiveResponse = { active: Record<string, { artifact: MappingArtifact }> };
 
 function short(value: string) { return value.length > 12 ? `${value.slice(0, 12)}…` : value; }
 function date(value: string | null) { return value ? new Date(value).toLocaleString() : "—"; }
 
+function sourceDescription(source: FullMappingLineageSource) {
+  if (source.artifact) return `${short(source.artifact.id)} · ${source.artifact.row_count} rows · ${short(source.artifact.checksum_sha256)}`;
+  if (source.id) return `${short(source.id)} · ${source.checksum ? short(source.checksum) : "checksum unavailable"} (recorded lineage)`;
+  return "Not recorded";
+}
+
 export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Props) {
   const [readiness, setReadiness] = useState<MappingArtifactReadiness | null>(null);
   const [artifacts, setArtifacts] = useState<MappingArtifact[]>([]);
-  const [activeFull, setActiveFull] = useState<MappingArtifact | null>(null);
+  const [activeState, setActiveState] = useState<MappingArtifactActiveState | null>(null);
   const [topDownArtifactId, setTopDownArtifactId] = useState("");
   const [bottomUpArtifactId, setBottomUpArtifactId] = useState("");
   const [rawTopDownArtifactId, setRawTopDownArtifactId] = useState("");
@@ -25,6 +44,7 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Prop
   const [generatedFull, setGeneratedFull] = useState<MappingArtifact | null>(null);
   const [message, setMessage] = useState("Checking Mapping Artifact readiness…");
   const [busy, setBusy] = useState(false);
+  const [activatingArtifactId, setActivatingArtifactId] = useState<string | null>(null);
 
   const enrichedTopDown = useMemo(
     () => artifacts.filter((item) => item.artifact_type === "top_down_with_publisher_ids" && item.status === "committed"),
@@ -38,10 +58,15 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Prop
     () => artifacts.filter((item) => item.artifact_type === "top_down_raw" && item.status === "committed"),
     [artifacts],
   );
+  const committedFullMappings = useMemo(() => committedFullArtifacts(artifacts), [artifacts]);
+  const activeFull = activeFullEntry(activeState);
 
   async function parse(response: Response) {
-    const payload = await response.json().catch(() => ({})) as { error?: { message?: string }; artifact?: MappingArtifact };
-    if (!response.ok) throw new Error(payload.error?.message || "Request failed.");
+    const payload = await response.json().catch(() => ({})) as { error?: { code?: string; message?: string }; artifact?: MappingArtifact };
+    if (!response.ok) {
+      const message = payload.error?.message || "Request failed.";
+      throw new Error(payload.error?.code ? `${payload.error.code}: ${message}` : message);
+    }
     return payload;
   }
 
@@ -57,9 +82,9 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Prop
       fetch(appApiPath("/api/mapping-artifacts/active"), { cache: "no-store" }),
     ]);
     const catalog = await parse(catalogResponse) as CatalogResponse;
-    const active = await parse(activeResponse) as ActiveResponse;
+    const active = await parse(activeResponse) as MappingArtifactActiveResponse;
     setArtifacts(catalog.artifacts);
-    setActiveFull(active.active.full?.artifact ?? null);
+    setActiveState(active.active);
   }
 
   useEffect(() => { void refreshRemote().catch((error) => setMessage(error instanceof Error ? error.message : "Failed to check readiness.")); }, []);
@@ -140,21 +165,34 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Prop
     finally { setBusy(false); }
   }
 
-  async function activate(artifactId: string) {
-    if (!window.confirm("Activate this Full Mapping for the next SensorTower artifact-mode staging run?")) return;
-    setBusy(true);
+  async function activate(artifact: MappingArtifact) {
+    const lineage = resolveFullMappingLineage(artifact, artifacts);
+    const confirmation = [
+      "Activate this committed Full Mapping?",
+      `Current active: ${activeFull?.artifact.id ?? "none"}`,
+      `Candidate: ${artifact.id}`,
+      `Rows: ${artifact.row_count}`,
+      `Checksum: ${artifact.checksum_sha256}`,
+      `Apps + Publisher IDs source: ${lineage.enrichedTopDown.id ?? "not recorded"}`,
+      `Bottom Up source: ${lineage.bottomUp.id ?? "not recorded"}`,
+      "This affects future artifact-mode staging runs only and does not start a pipeline.",
+    ].join("\n");
+    if (!window.confirm(confirmation)) return;
+    setActivatingArtifactId(artifact.id);
     try {
-      const response = await fetch(appApiPath(`/api/mapping-artifacts/artifacts/${artifactId}/activate`), { method: "POST" });
-      await parse(response);
-      setMessage("Activated Full Mapping artifact.");
+      const response = await fetch(appApiPath(`/api/mapping-artifacts/artifacts/${artifact.id}/activate`), { method: "POST" });
+      const payload = await parse(response) as MappingArtifactActivationResponse;
+      if (!payload.active || typeof payload.status !== "string") throw new Error("The pipeline returned an invalid activation response.");
       await refreshRemote();
+      setMessage(`Activated Full Mapping artifact ${short(artifact.id)}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not activate artifact."); }
-    finally { setBusy(false); }
+    finally { setActivatingArtifactId(null); }
   }
 
   const canPublish = Boolean(readiness?.canPublish && !busy);
   const canCommit = Boolean(readiness?.canCommit && !busy);
-  const canActivate = Boolean(readiness?.canActivate && !busy);
+  const canActivate = Boolean(readiness?.canActivate);
+  const canRead = Boolean(readiness?.authenticated);
   const blocking = generatedFull?.validation.blocking_errors ?? [];
 
   return <div className="workspace-page">
@@ -173,7 +211,7 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Prop
         <h3>Bottom Up saved versions</h3><div className="list-stack">{bottomUpVersions.slice(0, 6).map((version) => <div className="list-card" key={version.id}><strong>{version.label}</strong><p>{version.mappedRowCount} mapped rows · {short(version.checksumSha256)}</p><button className="button button-secondary" type="button" disabled={!canPublish} onClick={() => void publish("bottom-up", version.id)}>Publish Saved Version</button></div>)}{bottomUpVersions.length === 0 ? <p className="muted-text">Save a Bottom Up version first.</p> : null}</div>
       </div>
 
-      <div className="side-column"><section className="surface-card"><div className="section-heading"><div><h2>Active Full Mapping</h2><p>Scheduled artifact-mode ETL uses this version only.</p></div></div>{activeFull ? <div className="list-card"><strong>{short(activeFull.id)}</strong><p>{activeFull.row_count} rows · {short(activeFull.checksum_sha256)}</p><span>Created {date(activeFull.created_at)}</span></div> : <p className="muted-text">No active Full Mapping is available.</p>}</section></div>
+      <div className="side-column"><section className="surface-card"><div className="section-heading"><div><h2>Active Full Mapping</h2><p>Scheduled artifact-mode ETL uses this version only.</p></div></div>{activeFull ? <div className="list-card"><strong>{short(activeFull.artifact.id)}</strong><p>{activeFull.artifact.row_count} rows · {short(activeFull.artifact.checksum_sha256)}</p><span>Activated {date(activeFull.activated_at)} by {activeFull.activated_by || "—"}</span></div> : <p className="muted-text">No active Full Mapping is available.</p>}</section></div>
     </section>
 
     <section className="surface-card"><div className="section-heading"><div><h2>2. Generate Apps + Publisher IDs</h2><p>The SensorTower service performs this enrichment asynchronously. Unresolved IDs remain in the downloadable draft and block commit.</p></div></div>
@@ -186,7 +224,22 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions }: Prop
       <div className="settings-grid"><label className="settings-field"><span>Committed Apps + Publisher IDs</span><select value={topDownArtifactId} onChange={(event) => setTopDownArtifactId(event.target.value)} disabled={!readiness?.authenticated || busy}><option value="">Select committed enriched Top Down</option>{enrichedTopDown.map((item) => <option key={item.id} value={item.id}>{short(item.id)} · {item.row_count} rows · {short(item.checksum_sha256)}</option>)}</select></label>
       <label className="settings-field"><span>Committed Bottom Up</span><select value={bottomUpArtifactId} onChange={(event) => setBottomUpArtifactId(event.target.value)} disabled={!readiness?.authenticated || busy}><option value="">Select committed Bottom Up</option>{committedBottomUp.map((item) => <option key={item.id} value={item.id}>{short(item.id)} · {item.row_count} rows · {short(item.checksum_sha256)}</option>)}</select></label></div>
       <div className="action-strip"><button className="button button-primary" type="button" disabled={!canPublish || !topDownArtifactId || !bottomUpArtifactId} onClick={() => void generateFull()}>Generate Full Draft</button></div>
-      {generatedFull ? <div className="list-card"><strong>Full draft: {short(generatedFull.id)}</strong><p>{generatedFull.row_count} rows · status {generatedFull.status} · checksum {short(generatedFull.checksum_sha256)}</p>{blocking.length ? <p className="error-text">Blocking validation: {blocking.join(" ")}</p> : <p className="muted-text">Validation passed.</p>}<div className="action-strip"><a className="button button-secondary" href={appApiPath(`/api/mapping-artifacts/artifacts/${generatedFull.id}/download`)}>Download Draft</a><button className="button button-secondary" type="button" disabled={!canCommit || generatedFull.status !== "draft" || blocking.length > 0} onClick={() => void commit(generatedFull.id)}>Commit Draft</button><button className="button button-primary" type="button" disabled={!canActivate || generatedFull.status !== "committed"} onClick={() => void activate(generatedFull.id)}>Activate Full Mapping</button></div></div> : null}
+      {generatedFull ? <div className="list-card"><strong>Full draft: {short(generatedFull.id)}</strong><p>{generatedFull.row_count} rows · status {generatedFull.status} · checksum {short(generatedFull.checksum_sha256)}</p>{blocking.length ? <p className="error-text">Blocking validation: {blocking.join(" ")}</p> : <p className="muted-text">Validation passed.</p>}<div className="action-strip"><a className="button button-secondary" href={appApiPath(`/api/mapping-artifacts/artifacts/${generatedFull.id}/download`)}>Download Draft</a><button className="button button-secondary" type="button" disabled={!canCommit || generatedFull.status !== "draft" || blocking.length > 0} onClick={() => void commit(generatedFull.id)}>Commit Draft</button><button className="button button-primary" type="button" disabled={!canActivate || generatedFull.status !== "committed" || Boolean(activatingArtifactId)} onClick={() => void activate(generatedFull)}>Activate Full Mapping</button></div></div> : null}
+    </section>
+
+    <section className="surface-card">
+      <div className="section-heading"><div><h2>4. Committed Full Mapping versions</h2><p>Activate an earlier committed version to roll back future artifact-mode staging runs. Activation never starts a pipeline.</p></div></div>
+      {committedFullMappings.length === 0 ? <p className="muted-text">No committed Full Mapping versions are available.</p> : <div className="full-mapping-catalog">{committedFullMappings.map((artifact) => {
+        const isActive = isActiveFullArtifact(artifact.id, activeFull);
+        const lineage = resolveFullMappingLineage(artifact, artifacts);
+        const validationErrors = artifact.validation.blocking_errors;
+        const isActivating = activatingArtifactId === artifact.id;
+        return <article className={`full-mapping-version-card${isActive ? " full-mapping-version-card-active" : ""}`} key={artifact.id}>
+          <div className="full-mapping-version-heading"><div><div className="full-mapping-version-title"><strong>{short(artifact.id)}</strong>{isActive ? <span className="active-artifact-badge">Active</span> : null}{artifact.bootstrap_import ? <span className="bootstrap-artifact-badge">Bootstrap</span> : null}</div><p>{artifact.row_count} rows · checksum {short(artifact.checksum_sha256)}</p></div><div className="action-strip">{canRead ? <a className="button button-secondary button-inline" href={appApiPath(`/api/mapping-artifacts/artifacts/${artifact.id}/download`)}>Download CSV</a> : null}{isActive ? <span className="active-version-label">Active</span> : <button className="button button-primary button-inline" type="button" disabled={!canActivate || isActivating} onClick={() => void activate(artifact)}>{isActivating ? "Activating…" : "Activate this version"}</button>}</div></div>
+          <dl className="full-mapping-metadata"><div><dt>Created</dt><dd>{date(artifact.created_at)} by {artifact.created_by || "—"}</dd></div><div><dt>Committed</dt><dd>{date(artifact.committed_at)} by {artifact.committed_by || "—"}</dd></div><div><dt>Validation</dt><dd>{artifact.validation.valid && validationErrors.length === 0 ? "Passed" : validationErrors.join(" ") || "Validation requires review"}</dd></div><div><dt>Generator</dt><dd>{artifact.generator_version || "—"}{artifact.repository_git_sha ? ` · ${short(artifact.repository_git_sha)}` : ""}</dd></div></dl>
+          <div className="full-mapping-lineage"><strong>Source lineage</strong><p><span>Apps + Publisher IDs:</span> {sourceDescription(lineage.enrichedTopDown)}</p><p><span>Bottom Up:</span> {sourceDescription(lineage.bottomUp)}</p></div>
+        </article>;
+      })}</div>}
     </section>
   </div>;
 }

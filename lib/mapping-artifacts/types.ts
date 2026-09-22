@@ -40,6 +40,24 @@ export type MappingArtifact = {
   bootstrap_import: boolean;
 };
 
+export type MappingArtifactActiveEntry = {
+  artifact: MappingArtifact;
+  activated_at: string | null;
+  activated_by: string | null;
+};
+
+export type MappingArtifactActiveState = Record<string, MappingArtifactActiveEntry | null> & {
+  full: MappingArtifactActiveEntry | null;
+};
+
+export type MappingArtifactActiveResponse = {
+  active: MappingArtifactActiveState;
+};
+
+export type MappingArtifactActivationResponse = MappingArtifactActiveResponse & {
+  status: string;
+};
+
 export type MappingArtifactJobStatus = "queued" | "running" | "success" | "failed" | "interrupted";
 
 export type MappingArtifactJob = {

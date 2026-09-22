@@ -1,6 +1,8 @@
 import { MappingArtifactWorkbenchError } from "@/lib/mapping-artifacts/errors";
 import type {
   MappingArtifact,
+  MappingArtifactActivationResponse,
+  MappingArtifactActiveResponse,
   MappingArtifactJob,
   MappingArtifactType,
 } from "@/lib/mapping-artifacts/types";
@@ -90,7 +92,7 @@ export function getRemoteArtifact(artifactId: string) {
 }
 
 export function getRemoteActiveArtifacts() {
-  return requestPipeline<{ active: Record<string, { artifact: MappingArtifact }> }>("/mapping-artifacts/active");
+  return requestPipeline<MappingArtifactActiveResponse>("/mapping-artifacts/active");
 }
 
 export function publishRemoteArtifact(input: {
@@ -146,7 +148,7 @@ export function commitRemoteArtifact(artifactId: string, actor: string) {
 }
 
 export function activateRemoteFullArtifact(artifactId: string, actor: string) {
-  return requestPipeline<{ artifact: MappingArtifact }>(`/mapping-artifacts/${artifactIdPathPart(artifactId)}/activate`, {
+  return requestPipeline<MappingArtifactActivationResponse>(`/mapping-artifacts/${artifactIdPathPart(artifactId)}/activate`, {
     method: "POST",
     body: JSON.stringify({ activated_by: actor }),
   });

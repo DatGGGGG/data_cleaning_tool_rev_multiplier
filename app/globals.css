@@ -1588,6 +1588,20 @@ textarea {
   flex-wrap: wrap;
 }
 
+.step1-history-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.step1-history-filter input {
+  width: 16px;
+  height: 16px;
+}
+
 .batch-controls {
   justify-content: flex-end;
   flex-wrap: wrap;

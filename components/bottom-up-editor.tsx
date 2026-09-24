@@ -10,6 +10,7 @@ import type {
   BottomUpReviewStatus,
   BottomUpRowDraft,
   BottomUpStep1PublisherRow,
+  BottomUpStep1VersionSnapshot,
   BottomUpVersionSnapshot,
   BottomUpWorkbenchState,
 } from "@/lib/bottom-up/types";
@@ -49,6 +50,12 @@ type Step1PublishersResponse = {
   totalCount: number;
   totalPublisherCount: number;
   checkedPublisherCount: number;
+  comparison?: {
+    currentVersionId: string;
+    previousVersionCount: number;
+    currentPublisherCount: number;
+    historicallyNewPublisherCount: number;
+  };
   error?: string;
 };
 
@@ -388,6 +395,8 @@ export function BottomUpEditor({
   const [step1SelectAllFiltered, setStep1SelectAllFiltered] = useState(false);
   const [selectedStep1PublisherNames, setSelectedStep1PublisherNames] = useState<Set<string>>(new Set());
   const [step1BatchCheckedValue, setStep1BatchCheckedValue] = useState<"checked" | "unchecked">("checked");
+  const [step1NewOnly, setStep1NewOnly] = useState(false);
+  const [step1Comparison, setStep1Comparison] = useState<Step1PublishersResponse["comparison"]>();
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [page, setPage] = useState(1);
@@ -404,6 +413,7 @@ export function BottomUpEditor({
 
   const latestLogs: BottomUpActivityLogEntry[] = state.logs.slice(0, 6);
   const latestVersions: BottomUpVersionSnapshot[] = state.versions.slice(0, 4);
+  const latestStep1Versions: BottomUpStep1VersionSnapshot[] = state.step1Versions.slice(0, 6);
   const productionSync = state.productionSync;
   const productionSyncIsRunning = productionSync.status === "queued" || productionSync.status === "running";
   const lastProductionLoadLabel =
@@ -499,7 +509,7 @@ export function BottomUpEditor({
     }
 
     void fetchStep1PublisherPage();
-  }, [step1AppliedFilters, step1Page, step1RowsPerPage, step1SortDirection, step1SortField, workflowStep]);
+  }, [step1AppliedFilters, step1NewOnly, step1Page, step1RowsPerPage, step1SortDirection, step1SortField, workflowStep]);
 
   useEffect(() => {
     if (!hasLoadedWorkbench) {
@@ -557,11 +567,6 @@ export function BottomUpEditor({
         }
 
         setState((current) => ({ ...current, productionSync: payload.syncStatus as BottomUpProductionSyncState }));
-        if (payload.syncStatus.status !== "queued" && payload.syncStatus.status !== "running" && completedProductionSyncRef.current !== payload.syncStatus.updatedAt) {
-          completedProductionSyncRef.current = payload.syncStatus.updatedAt;
-          setStatusMessage(payload.syncStatus.message);
-          void reloadWorkbench();
-        }
       } catch {
         // Keep the last persisted status visible; the next poll can recover from a transient network issue.
       }
@@ -574,6 +579,37 @@ export function BottomUpEditor({
       window.clearInterval(handle);
     };
   }, [productionSyncIsRunning]);
+
+  useEffect(() => {
+    if (productionSync.status === "idle" || productionSync.status === "queued" || productionSync.status === "running") {
+      return;
+    }
+    if (completedProductionSyncRef.current === productionSync.updatedAt) {
+      return;
+    }
+    completedProductionSyncRef.current = productionSync.updatedAt;
+    let cancelled = false;
+
+    void (async () => {
+      setStatusMessage(productionSync.message);
+      await reloadWorkbench();
+      if (cancelled || productionSync.status !== "succeeded") {
+        return;
+      }
+      setStep1SelectAllFiltered(false);
+      setSelectedStep1PublisherNames(new Set());
+      await fetchStep1PublisherPage({ quiet: workflowStep !== "step1" });
+      if (!cancelled) {
+        setStatusMessage(`${productionSync.message} Step 1 publisher names are up to date.`);
+      }
+    })().catch((error) => {
+      if (!cancelled) {
+        setStatusMessage(error instanceof Error ? error.message : "Failed to refresh Step 1 after production load.");
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [productionSync.status, productionSync.updatedAt]);
 
   async function parseResponse(response: Response) {
     const raw = await response.text();
@@ -707,6 +743,7 @@ export function BottomUpEditor({
         sortField: step1SortField,
         sortDirection: step1SortDirection,
         filters: JSON.stringify(step1AppliedFilters),
+        newOnly: String(step1NewOnly),
       });
       const response = await fetch(appApiPath(`/api/bottom-up/step1-publishers?${query.toString()}`), {
         cache: "no-store",
@@ -720,6 +757,7 @@ export function BottomUpEditor({
       setStep1TotalCount(payload.totalCount ?? 0);
       setStep1TotalPublisherCount(payload.totalPublisherCount ?? 0);
       setStep1CheckedPublisherCount(payload.checkedPublisherCount ?? 0);
+      setStep1Comparison(payload.comparison);
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Failed to load Step 1 publisher names.");
     } finally {
@@ -813,6 +851,7 @@ export function BottomUpEditor({
           filters: step1AppliedFilters,
           sortField: step1SortField,
           sortDirection: step1SortDirection,
+          newOnly: step1NewOnly,
         }),
       });
       const raw = await response.text();
@@ -1164,6 +1203,7 @@ export function BottomUpEditor({
         filters: JSON.stringify(step1AppliedFilters),
         sortField: step1SortField,
         sortDirection: step1SortDirection,
+        newOnly: String(step1NewOnly),
       });
       const response = await fetch(appApiPath(`/api/bottom-up/step1-publishers/export?${query.toString()}`), {
         cache: "no-store",
@@ -1512,6 +1552,22 @@ export function BottomUpEditor({
                       <button type="button" className="button button-primary button-compact" onClick={applyStep1Filters}>Apply Filters</button>
                       <button type="button" className="button button-secondary button-compact" onClick={clearStep1Filters}>Clear Filters</button>
                     </div>
+                    <label className="step1-history-filter">
+                      <input
+                        type="checkbox"
+                        checked={step1NewOnly}
+                        disabled={!state.currentStep1VersionId}
+                        onChange={(event) => {
+                          setStep1NewOnly(event.target.checked);
+                          setStep1Page(1);
+                          setStep1SelectAllFiltered(false);
+                          setSelectedStep1PublisherNames(new Set());
+                        }}
+                      />
+                      <span>Only show publisher names never seen in previous versions</span>
+                    </label>
+                    {step1NewOnly && step1Comparison ? <p className="muted-text">{formatCount(step1Comparison.historicallyNewPublisherCount)} historically new names across the current dataset, compared with all {formatCount(step1Comparison.previousVersionCount)} previous Step 1 versions.</p> : null}
+                    {!state.currentStep1VersionId ? <p className="muted-text">Run a successful production load to create the first Step 1 history version.</p> : null}
                   </div>
 
                   <div className="batch-controls">
@@ -1836,6 +1892,18 @@ export function BottomUpEditor({
         </div>
 
         <div className="side-column">
+          {workflowStep === "step1" ? <section className="surface-card">
+            <div className="section-heading"><h2>Step 1 Versions</h2></div>
+            <div className="list-stack">
+              {latestStep1Versions.length === 0 ? <div className="list-card muted-text">No Step 1 production versions saved yet.</div> : latestStep1Versions.map((version) => (
+                <div key={version.id} className="list-card">
+                  <strong>{version.label}{state.currentStep1VersionId === version.id ? " · Current" : ""}</strong>
+                  <p>{formatCount(version.publisherCount)} publisher names · {formatCount(version.newPublisherCount)} never seen previously</p>
+                  <span>{version.bootstrap ? "Bootstrap baseline" : `Created by ${version.createdBy}`}</span>
+                </div>
+              ))}
+            </div>
+          </section> : null}
           <section className="surface-card">
             <div className="section-heading"><h2>Recent Versions</h2></div>
             <div className="list-stack">

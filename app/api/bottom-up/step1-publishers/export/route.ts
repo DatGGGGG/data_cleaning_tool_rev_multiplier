@@ -40,6 +40,7 @@ export async function GET(request: Request) {
       filters: parseFilters(url.searchParams.get("filters")),
       sortField,
       sortDirection,
+      newOnly: url.searchParams.get("newOnly") === "true",
     });
 
     return new Response(csv, {

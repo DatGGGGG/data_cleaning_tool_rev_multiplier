@@ -12,6 +12,8 @@ export default async function BottomUpPage() {
     appCandidateCount: 0,
     publisherCandidates: [],
     publisherCandidateCount: 0,
+    step1Versions: [],
+    currentStep1VersionId: null,
     versions: [],
     logs: [],
     productionSync: {

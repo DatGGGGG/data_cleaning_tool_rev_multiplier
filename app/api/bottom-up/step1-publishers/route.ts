@@ -44,6 +44,7 @@ export async function GET(request: Request) {
       filters,
       sortField,
       sortDirection,
+      newOnly: url.searchParams.get("newOnly") === "true",
     });
 
     return NextResponse.json(payload);

@@ -88,6 +88,25 @@ export type BottomUpVersionMetadata = BottomUpVersionSnapshot & {
   needsReviewCount: number;
 };
 
+export type BottomUpStep1VersionSnapshot = {
+  id: string;
+  label: string;
+  createdAt: string;
+  createdBy: string;
+  sourceSyncJobId: string;
+  sourceCompletedAt: string;
+  sourceType: "api" | "file" | "";
+  publisherCount: number;
+  newPublisherCount: number;
+  checksumSha256: string;
+  bootstrap: boolean;
+};
+
+export type BottomUpStep1VersionDetail = BottomUpStep1VersionSnapshot & {
+  publisherNames: string[];
+  newPublisherNames: string[];
+};
+
 export type BottomUpActivityLogEntry = {
   id: string;
   action: string;
@@ -145,6 +164,8 @@ export type BottomUpWorkbenchState = {
   appCandidateCount: number;
   publisherCandidates: BottomUpPublisherCandidate[];
   publisherCandidateCount: number;
+  step1Versions: BottomUpStep1VersionSnapshot[];
+  currentStep1VersionId: string | null;
   versions: BottomUpVersionSnapshot[];
   logs: BottomUpActivityLogEntry[];
   productionSync: BottomUpProductionSyncState;

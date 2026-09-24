@@ -12,6 +12,7 @@ export async function POST(request: Request) {
       filters?: BottomUpStep1FilterRule[];
       sortField?: BottomUpStep1SortField | "";
       sortDirection?: "asc" | "desc";
+      newOnly?: boolean;
     };
     const result = await updateBottomUpStep1Checked({
       operatorName: body.operatorName?.trim() || "Local operator",
@@ -21,6 +22,7 @@ export async function POST(request: Request) {
       filters: body.filters,
       sortField: body.sortField,
       sortDirection: body.sortDirection,
+      newOnly: Boolean(body.newOnly),
     });
 
     return NextResponse.json(result);

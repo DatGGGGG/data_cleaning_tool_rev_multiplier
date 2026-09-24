@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { getEffectiveAppSettings } from "@/lib/app-settings/server";
@@ -14,6 +15,8 @@ import type {
   BottomUpStep1FilterRule,
   BottomUpStep1PublisherRow,
   BottomUpStep1SortField,
+  BottomUpStep1VersionDetail,
+  BottomUpStep1VersionSnapshot,
   BottomUpVersionMetadata,
   BottomUpVersionSnapshot,
   BottomUpWorkbenchState,
@@ -38,6 +41,7 @@ const JOBS_DIR = path.join(STORAGE_ROOT, "jobs");
 const PRODUCTION_SYNC_STATE_PATH = path.join(JOBS_DIR, "bottom-up-production-sync.json");
 const PRODUCTION_SYNC_STATE_TEMP_PATH = path.join(JOBS_DIR, "bottom-up-production-sync.json.tmp");
 const PRODUCTION_SYNC_JOBS_DIR = path.join(JOBS_DIR, "bottom-up-production");
+const STEP1_VERSIONS_DIR = path.join(STORAGE_ROOT, "bottom-up", "step1-versions");
 const MAX_PUBLISHER_HOVER_APPS = 30;
 const LOCAL_MANUAL_SEED_PATH =
   process.env.BOTTOM_UP_SEED_CSV ||
@@ -64,6 +68,8 @@ type PersistedVersion = BottomUpVersionSnapshot & {
   rows: BottomUpRowDraft[];
 };
 
+type PersistedStep1Version = BottomUpStep1VersionSnapshot;
+
 type PersistedArtifact = {
   id: string;
   kind: "import_csv" | "export_csv";
@@ -85,6 +91,8 @@ type PersistedStore = {
   appCandidateCount: number;
   publisherCandidates: BottomUpPublisherCandidate[];
   publisherCandidateCount: number;
+  step1Versions: PersistedStep1Version[];
+  currentStep1VersionId: string | null;
   versions: PersistedVersion[];
   logs: BottomUpActivityLogEntry[];
   artifacts: PersistedArtifact[];
@@ -195,6 +203,7 @@ async function ensureStorageDirectories() {
   await fs.mkdir(EXPORTS_DIR, { recursive: true });
   await fs.mkdir(JOBS_DIR, { recursive: true });
   await fs.mkdir(PRODUCTION_SYNC_JOBS_DIR, { recursive: true });
+  await fs.mkdir(STEP1_VERSIONS_DIR, { recursive: true });
 }
 
 async function readSeedRows() {
@@ -222,6 +231,8 @@ async function createInitialStore(): Promise<PersistedStore> {
     appCandidateCount: 0,
     publisherCandidates: [],
     publisherCandidateCount: 0,
+    step1Versions: [],
+    currentStep1VersionId: null,
     versions: [],
     logs: [
       createLog(
@@ -378,6 +389,36 @@ function normalizeVersion(value: unknown, index: number): PersistedVersion | nul
   };
 }
 
+function normalizeStep1Version(value: unknown, index: number): PersistedStep1Version | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as Partial<PersistedStep1Version>;
+  const id = normalizeText(candidate.id);
+  if (!id) {
+    return null;
+  }
+
+  const count = (input: unknown) => {
+    const numeric = Number(input);
+    return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0;
+  };
+  return {
+    id,
+    label: normalizeText(candidate.label) || `Production load ${index + 1}`,
+    createdAt: normalizeText(candidate.createdAt) || nowIso(),
+    createdBy: normalizeText(candidate.createdBy) || "system",
+    sourceSyncJobId: normalizeText(candidate.sourceSyncJobId),
+    sourceCompletedAt: normalizeText(candidate.sourceCompletedAt),
+    sourceType: candidate.sourceType === "api" || candidate.sourceType === "file" ? candidate.sourceType : "",
+    publisherCount: count(candidate.publisherCount),
+    newPublisherCount: count(candidate.newPublisherCount),
+    checksumSha256: normalizeText(candidate.checksumSha256),
+    bootstrap: Boolean(candidate.bootstrap),
+  };
+}
+
 function normalizeStore(value: unknown): PersistedStore {
   if (!value || typeof value !== "object") {
     return {
@@ -391,6 +432,8 @@ function normalizeStore(value: unknown): PersistedStore {
       appCandidateCount: 0,
       publisherCandidates: [],
       publisherCandidateCount: 0,
+      step1Versions: [],
+      currentStep1VersionId: null,
       versions: [],
       logs: [],
       artifacts: [],
@@ -405,6 +448,8 @@ function normalizeStore(value: unknown): PersistedStore {
     appCandidateCount?: unknown;
     publisherCandidates?: unknown;
     publisherCandidateCount?: unknown;
+    step1Versions?: unknown;
+    currentStep1VersionId?: unknown;
     versions?: unknown;
     logs?: unknown;
     artifacts?: unknown;
@@ -460,6 +505,13 @@ function normalizeStore(value: unknown): PersistedStore {
         : Array.isArray(candidate.publisherCandidates)
           ? candidate.publisherCandidates.length
           : 0,
+    step1Versions: Array.isArray(candidate.step1Versions)
+      ? candidate.step1Versions
+          .map((version, index) => normalizeStep1Version(version, index))
+          .filter((version): version is PersistedStep1Version => Boolean(version))
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      : [],
+    currentStep1VersionId: normalizeText(candidate.currentStep1VersionId) || null,
     versions: Array.isArray(candidate.versions)
       ? candidate.versions
           .map((version, index) => normalizeVersion(version, index))
@@ -672,6 +724,114 @@ function appendLogs(store: PersistedStore, logs: BottomUpActivityLogEntry[]) {
   }
 
   store.logs = [...logs, ...store.logs].slice(0, MAX_LOG_COUNT);
+}
+
+export function canonicalStep1PublisherName(value: string) {
+  return normalizeText(value).replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function step1VersionPath(versionId: string) {
+  return path.join(STEP1_VERSIONS_DIR, `${versionId}.json`);
+}
+
+function snapshotPublisherNames(candidates: BottomUpPublisherCandidate[]) {
+  const byCanonicalName = new Map<string, string>();
+  for (const candidate of candidates) {
+    const publisherName = normalizeText(candidate.publisherName).replace(/\s+/g, " ");
+    const canonicalName = canonicalStep1PublisherName(publisherName);
+    if (canonicalName && !byCanonicalName.has(canonicalName)) {
+      byCanonicalName.set(canonicalName, publisherName);
+    }
+  }
+  return [...byCanonicalName.entries()]
+    .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }))
+    .map(([, publisherName]) => publisherName);
+}
+
+function step1NamesChecksum(publisherNames: string[]) {
+  return createHash("sha256")
+    .update(publisherNames.map(canonicalStep1PublisherName).sort().join("\n"), "utf8")
+    .digest("hex");
+}
+
+async function writeStep1VersionDetail(detail: BottomUpStep1VersionDetail) {
+  await ensureStorageDirectories();
+  const destination = step1VersionPath(detail.id);
+  const temporary = `${destination}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify(detail, null, 2), "utf-8");
+  await fs.rename(temporary, destination);
+}
+
+async function readStep1VersionDetail(version: PersistedStep1Version): Promise<BottomUpStep1VersionDetail> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await fs.readFile(step1VersionPath(version.id), "utf-8")) as unknown;
+  } catch {
+    throw new Error(`Step 1 version ${version.label} is unavailable because its immutable snapshot file is missing or invalid.`);
+  }
+  if (!raw || typeof raw !== "object") {
+    throw new Error(`Step 1 version ${version.label} has an invalid immutable snapshot.`);
+  }
+  const candidate = raw as Partial<BottomUpStep1VersionDetail>;
+  if (normalizeText(candidate.id) !== version.id || !Array.isArray(candidate.publisherNames)) {
+    throw new Error(`Step 1 version ${version.label} has an invalid immutable snapshot.`);
+  }
+  const publisherNames = snapshotPublisherNames(candidate.publisherNames.map((publisherName) => ({ publisherName, publisherIds: [], appCount: 0, apps: [] })));
+  const newPublisherNames = Array.isArray(candidate.newPublisherNames)
+    ? snapshotPublisherNames(candidate.newPublisherNames.map((publisherName) => ({ publisherName, publisherIds: [], appCount: 0, apps: [] })))
+    : [];
+  if (step1NamesChecksum(publisherNames) !== version.checksumSha256) {
+    throw new Error(`Step 1 version ${version.label} failed its checksum validation.`);
+  }
+  return { ...version, publisherNames, newPublisherNames };
+}
+
+async function createStep1Version(
+  store: PersistedStore,
+  input: {
+    sourceSyncJobId: string;
+    sourceCompletedAt: string;
+    sourceType: "api" | "file" | "";
+    createdBy: string;
+    candidates: BottomUpPublisherCandidate[];
+    bootstrap: boolean;
+  },
+) {
+  const existing = store.step1Versions.find((version) => version.sourceSyncJobId === input.sourceSyncJobId);
+  if (existing) {
+    return existing;
+  }
+
+  const publisherNames = snapshotPublisherNames(input.candidates);
+  const previouslySeen = new Set<string>();
+  for (const version of store.step1Versions) {
+    const previous = await readStep1VersionDetail(version);
+    for (const publisherName of previous.publisherNames) {
+      previouslySeen.add(canonicalStep1PublisherName(publisherName));
+    }
+  }
+  const newPublisherNames = input.bootstrap
+    ? []
+    : publisherNames.filter((publisherName) => !previouslySeen.has(canonicalStep1PublisherName(publisherName)));
+  const timestamp = nowIso();
+  const metadata: PersistedStep1Version = {
+    id: createEntityId("step1_version"),
+    label: input.bootstrap
+      ? `Baseline before production load ${new Date(input.sourceCompletedAt).toLocaleString()}`
+      : `Production load ${new Date(input.sourceCompletedAt).toLocaleString()}`,
+    createdAt: timestamp,
+    createdBy: input.createdBy,
+    sourceSyncJobId: input.sourceSyncJobId,
+    sourceCompletedAt: input.sourceCompletedAt,
+    sourceType: input.sourceType,
+    publisherCount: publisherNames.length,
+    newPublisherCount: newPublisherNames.length,
+    checksumSha256: step1NamesChecksum(publisherNames),
+    bootstrap: input.bootstrap,
+  };
+  await writeStep1VersionDetail({ ...metadata, publisherNames, newPublisherNames });
+  store.step1Versions.unshift(metadata);
+  return metadata;
 }
 
 function normalizeBottomUpAppCandidate(value: unknown, index: number): BottomUpAppCandidate | null {
@@ -1270,6 +1430,8 @@ function makeWorkbenchState(
     appCandidateCount: store.appCandidateCount || store.appCandidates.length,
     publisherCandidates: [],
     publisherCandidateCount: store.publisherCandidateCount || store.publisherCandidates.length,
+    step1Versions: store.step1Versions.map((version) => ({ ...version })),
+    currentStep1VersionId: store.currentStep1VersionId,
     versions: store.versions.map((version) => ({
       id: version.id,
       label: version.label,
@@ -1431,14 +1593,40 @@ function buildStep1Rows(store: PersistedStore): BottomUpStep1PublisherRow[] {
   return [...byPublisherName.values()];
 }
 
-function getFilteredStep1Rows(
+async function getStep1HistoricalNewPublisherNames(store: PersistedStore, newOnly: boolean) {
+  if (!newOnly) {
+    return { names: null as Set<string> | null, comparison: undefined };
+  }
+  const currentVersion = store.step1Versions.find((version) => version.id === store.currentStep1VersionId);
+  if (!currentVersion) {
+    throw new Error("Historical-new filtering is unavailable until a successful production load creates a current Step 1 version.");
+  }
+  const detail = await readStep1VersionDetail(currentVersion);
+  return {
+    names: new Set(detail.newPublisherNames.map(canonicalStep1PublisherName)),
+    comparison: {
+      currentVersionId: currentVersion.id,
+      previousVersionCount: store.step1Versions.filter((version) => version.id !== currentVersion.id).length,
+      currentPublisherCount: currentVersion.publisherCount,
+      historicallyNewPublisherCount: currentVersion.newPublisherCount,
+    },
+  };
+}
+
+async function getFilteredStep1Rows(
   store: PersistedStore,
   filters: BottomUpStep1FilterRule[],
   sortField: BottomUpStep1SortField | "",
   sortDirection: "asc" | "desc",
+  newOnly = false,
 ) {
+  const comparison = await getStep1HistoricalNewPublisherNames(store, newOnly);
+  const rows = buildStep1Rows(store).filter((row) =>
+    (!comparison.names || comparison.names.has(canonicalStep1PublisherName(row.publisherName))) &&
+    step1RowMatchesFilters(row, filters),
+  );
   return sortStep1Rows(
-    buildStep1Rows(store).filter((row) => step1RowMatchesFilters(row, filters)),
+    rows,
     sortField,
     sortDirection,
   );
@@ -1450,11 +1638,12 @@ export async function getBottomUpStep1PublisherPage(params: {
   filters: BottomUpStep1FilterRule[];
   sortField: BottomUpStep1SortField | "";
   sortDirection: "asc" | "desc";
+  newOnly?: boolean;
 }) {
   const store = await readStore();
   const page = Math.max(1, Math.floor(params.page));
   const pageSize = Math.min(500, Math.max(10, Math.floor(params.pageSize)));
-  const sortedRows = getFilteredStep1Rows(store, params.filters, params.sortField, params.sortDirection);
+  const sortedRows = await getFilteredStep1Rows(store, params.filters, params.sortField, params.sortDirection, params.newOnly);
   const totalCount = sortedRows.length;
   const rows = sortedRows.slice((page - 1) * pageSize, page * pageSize);
 
@@ -1463,6 +1652,7 @@ export async function getBottomUpStep1PublisherPage(params: {
     totalCount,
     totalPublisherCount: store.publisherCandidateCount || store.publisherCandidates.length,
     checkedPublisherCount: store.checkedPublisherNames.length,
+    comparison: (await getStep1HistoricalNewPublisherNames(store, Boolean(params.newOnly))).comparison,
   };
 }
 
@@ -1471,9 +1661,10 @@ export async function exportBottomUpStep1PublisherCsv(params: {
   filters: BottomUpStep1FilterRule[];
   sortField: BottomUpStep1SortField | "";
   sortDirection: "asc" | "desc";
+  newOnly?: boolean;
 }) {
   const store = await readStore();
-  const rows = getFilteredStep1Rows(store, params.filters, params.sortField, params.sortDirection);
+  const rows = await getFilteredStep1Rows(store, params.filters, params.sortField, params.sortDirection, params.newOnly);
   const csv = buildBottomUpStep1PublisherCsv(rows);
   const fileName = `bottom_up_step1_publisher_names_filtered_${Date.now()}.csv`;
   const storedPath = path.join(EXPORTS_DIR, fileName);
@@ -1510,11 +1701,12 @@ export async function updateBottomUpStep1Checked(params: {
   filters?: BottomUpStep1FilterRule[];
   sortField?: BottomUpStep1SortField | "";
   sortDirection?: "asc" | "desc";
+  newOnly?: boolean;
 }) {
   const store = await readStore();
   const targetNames =
     params.mode === "filtered"
-      ? getFilteredStep1Rows(store, params.filters ?? [], params.sortField ?? "", params.sortDirection ?? "asc").map(
+      ? (await getFilteredStep1Rows(store, params.filters ?? [], params.sortField ?? "", params.sortDirection ?? "asc", params.newOnly)).map(
           (row) => row.publisherName,
         )
       : (params.publisherNames ?? []).map(normalizeText).filter(Boolean);
@@ -1552,6 +1744,20 @@ export async function getBottomUpWorkbenchState(operatorName = "Local operator")
   const store = await readStore();
   const productionSync = await getBottomUpProductionSyncState();
   return { ...makeWorkbenchState(store, operatorName), productionSync };
+}
+
+export async function listBottomUpStep1Versions() {
+  const store = await readStore();
+  const versions: PersistedStep1Version[] = [];
+  for (const version of store.step1Versions) {
+    try {
+      await readStep1VersionDetail(version);
+      versions.push(version);
+    } catch {
+      // A missing immutable file cannot be used as history or exposed as a valid version.
+    }
+  }
+  return versions.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
 export async function saveBottomUpRows(
@@ -1704,7 +1910,18 @@ async function runBottomUpProductionSync(operatorName: string, requestedJobId?: 
     checkpoint,
   );
 
-  const result = await mutateStore((store) => {
+  const completedAt = nowIso();
+  const result = await mutateStore(async (store) => {
+    if (store.step1Versions.length === 0 && store.publisherCandidates.length > 0) {
+      await createStep1Version(store, {
+        sourceSyncJobId: `${jobId}:bootstrap`,
+        sourceCompletedAt: completedAt,
+        sourceType: "",
+        createdBy: "system",
+        candidates: store.publisherCandidates,
+        bootstrap: true,
+      });
+    }
     const references = buildReferenceLookups([...manualReferenceRows, ...store.rows]);
     const productionRows = production.candidates
       .map((candidate, index) => createRowFromProductionCandidate(candidate, index + 1, references))
@@ -1717,6 +1934,15 @@ async function runBottomUpProductionSync(operatorName: string, requestedJobId?: 
     store.appCandidateCount = production.appCandidates.length;
     store.publisherCandidates = buildPublisherCandidates(production.appCandidates);
     store.publisherCandidateCount = store.publisherCandidates.length;
+    const step1Version = await createStep1Version(store, {
+      sourceSyncJobId: jobId,
+      sourceCompletedAt: completedAt,
+      sourceType: production.sourceType,
+      createdBy: operatorName,
+      candidates: store.publisherCandidates,
+      bootstrap: false,
+    });
+    store.currentStep1VersionId = step1Version.id;
     const needsReviewCount = store.rows.filter((row) => row.reviewStatus === "needs_review").length;
     const summary: ProductionSyncSummary = {
       sourcePath: production.sourcePath,
@@ -1737,11 +1963,17 @@ async function runBottomUpProductionSync(operatorName: string, requestedJobId?: 
         DATASET_ID,
         `Synced ${summary.candidateRows} publisher candidates from production App Full Info (${summary.replacedCount} replaced, ${summary.insertedCount} inserted).`,
       ),
+      createLog(
+        "create_bottom_up_step1_version",
+        operatorName,
+        "step1_version",
+        step1Version.id,
+        `Captured ${step1Version.publisherCount} Step 1 publisher names; ${step1Version.newPublisherCount} have never appeared in previous versions.`,
+      ),
     ]);
     return { state: makeWorkbenchState(store, operatorName), summary, publisherCandidateCount: store.publisherCandidateCount };
   });
 
-  const completedAt = nowIso();
   const succeeded: BottomUpProductionSyncState = {
     ...sync,
     status: "succeeded",

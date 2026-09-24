@@ -24,6 +24,7 @@ import {
   normalizePublisherSheet,
 } from "@/lib/top-down/workbench";
 import { getCsvIntegrity, VersionNotFoundError } from "@/lib/version-api";
+import type { LocalVersionPreview } from "@/lib/version-preview";
 
 const STORAGE_ROOT = path.join(process.cwd(), "storage");
 const IMPORTS_DIR = path.join(STORAGE_ROOT, "imports");
@@ -1137,6 +1138,29 @@ export async function exportTopDownVersionCsv(versionId: string) {
   return {
     fileName: `mapping_publisher_to_apps_top_down_${version.id}.csv`,
     csv,
+  };
+}
+
+export async function getTopDownVersionPreview(versionId: string): Promise<LocalVersionPreview> {
+  const store = await readStore();
+  const version = store.versions.find((item) => item.id === versionId);
+  if (!version) throw new VersionNotFoundError();
+  const flattenedRows = flattenPublisherRows(version.publishers);
+  const csv = buildFlattenedCsv(flattenedRows);
+  return {
+    title: "Top Down saved version",
+    workflow: "top_down",
+    version: {
+      id: version.id,
+      label: version.label,
+      createdAt: version.createdAt,
+      createdBy: version.createdBy,
+      rowCount: flattenedRows.length,
+      checksumSha256: getCsvIntegrity(csv).checksumSha256,
+      summary: `${version.publisherCount} publishers · ${flattenedRows.length} flattened apps`,
+    },
+    columns: ["os", "cleaned_publisher_name", "game_name", "sensor_tower_link", "app_id_trimmed"],
+    rows: flattenedRows.map((row) => [row.os, row.cleanedPublisherName, row.gameName, row.sensorTowerLink, row.appIdTrimmed]),
   };
 }
 

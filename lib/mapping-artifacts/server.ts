@@ -9,6 +9,7 @@ import {
   listRemoteArtifacts,
   publishRemoteArtifact,
   startRemoteTopDownEnrichment,
+  downloadRemoteArtifact,
 } from "@/lib/mapping-artifacts/client";
 import { MappingArtifactWorkbenchError } from "@/lib/mapping-artifacts/errors";
 import {
@@ -23,10 +24,11 @@ import {
   savePublicationReceipt,
 } from "@/lib/mapping-artifacts/store";
 import { isActiveEnrichmentJobStatus } from "@/lib/mapping-artifacts/job-contract";
-import type { MappingArtifactJobResume, MappingArtifactType, StoredTopDownEnrichmentJob } from "@/lib/mapping-artifacts/types";
+import type { MappingArtifactCsvPreview, MappingArtifactJobResume, MappingArtifactType, StoredTopDownEnrichmentJob } from "@/lib/mapping-artifacts/types";
 import { exportBottomUpVersionCsv, listBottomUpVersions } from "@/lib/bottom-up/server";
 import { exportTopDownVersionCsv, getTopDownVersionFreshness, listTopDownVersions } from "@/lib/top-down/server";
 import type { WorkbenchPrincipal } from "@/lib/mapping-artifacts/auth";
+import { parseCsvPreview } from "@/lib/csv-preview";
 
 function checksum(csv: string) {
   return createHash("sha256").update(Buffer.from(csv, "utf-8")).digest("hex");
@@ -109,6 +111,40 @@ export async function getRemoteArtifactCatalog(filters: { type?: MappingArtifact
 
 export async function getRemoteArtifactDetail(artifactId: string) {
   return getRemoteArtifact(artifactId);
+}
+
+const MAX_ARTIFACT_PREVIEW_BYTES = 25 * 1024 * 1024;
+
+export async function previewRemoteArtifact(
+  artifactId: string,
+  input: { page?: number; pageSize?: number; search?: string } = {},
+): Promise<MappingArtifactCsvPreview> {
+  const detail = await getRemoteArtifact(artifactId);
+  const downloaded = await downloadRemoteArtifact(artifactId);
+  const bytes = Buffer.from(downloaded.body);
+  if (bytes.byteLength > MAX_ARTIFACT_PREVIEW_BYTES) {
+    throw new MappingArtifactWorkbenchError("preview_too_large", "This CSV is too large for an in-browser preview. Download it instead.", 413);
+  }
+  if (checksum(bytes.toString("utf-8")) !== detail.artifact.checksum_sha256) {
+    throw new MappingArtifactWorkbenchError("artifact_integrity_failed", "The downloaded artifact does not match its recorded checksum.", 409);
+  }
+  const parsed = parseCsvPreview(bytes.toString("utf-8"));
+  const search = input.search?.trim() || "";
+  const needle = search.toLocaleLowerCase();
+  const matchedRows = needle ? parsed.rows.filter((row) => row.some((value) => value.toLocaleLowerCase().includes(needle))) : parsed.rows;
+  const pageSize = Math.min(100, Math.max(1, Math.floor(input.pageSize || 50)));
+  const pageCount = Math.max(1, Math.ceil(matchedRows.length / pageSize));
+  const page = Math.min(pageCount, Math.max(1, Math.floor(input.page || 1)));
+  return {
+    artifact: detail.artifact,
+    columns: parsed.columns,
+    rows: matchedRows.slice((page - 1) * pageSize, page * pageSize),
+    totalRows: matchedRows.length,
+    page,
+    pageSize,
+    pageCount,
+    search,
+  };
 }
 
 export async function getRemoteActiveArtifactState() {

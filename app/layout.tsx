@@ -36,6 +36,9 @@ export default async function RootLayout({
               <Link href="/bottom-up" className="topbar-link">
                 Bottom Up Mapping
               </Link>
+              <Link href="/apps-publisher-ids" className="topbar-link">
+                Apps + Publisher IDs
+              </Link>
               <Link href="/full-mapping" className="topbar-link">
                 Full Mapping
               </Link>
@@ -44,9 +47,6 @@ export default async function RootLayout({
               </Link>
               <Link href="/publisher-management" className="topbar-link">
                 Publisher Management
-              </Link>
-              <Link href="/" className="topbar-link">
-                Versions
               </Link>
               <Link href="/audit-trail" className="topbar-link">
                 Audit Trail

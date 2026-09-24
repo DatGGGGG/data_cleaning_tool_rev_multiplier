@@ -31,6 +31,7 @@ import {
   upsertRowsByPublisherId,
 } from "@/lib/bottom-up/workbench";
 import { getCsvIntegrity, VersionNotFoundError } from "@/lib/version-api";
+import type { LocalVersionPreview } from "@/lib/version-preview";
 
 const STORAGE_ROOT = path.join(process.cwd(), "storage");
 const IMPORTS_DIR = path.join(STORAGE_ROOT, "imports");
@@ -2155,5 +2156,28 @@ export async function exportBottomUpVersionCsv(versionId: string) {
   return {
     fileName: `mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_${version.id}.csv`,
     csv: buildBottomUpCsv(version.rows),
+  };
+}
+
+export async function getBottomUpVersionPreview(versionId: string): Promise<LocalVersionPreview> {
+  const store = await readStore();
+  const version = store.versions.find((item) => item.id === versionId);
+  if (!version) throw new VersionNotFoundError();
+  const rows = version.rows.filter((row) => row.cleanedPublisherName && row.publisherId && row.publisherName);
+  const csv = buildBottomUpCsv(version.rows);
+  return {
+    title: "Bottom Up saved version",
+    workflow: "bottom_up",
+    version: {
+      id: version.id,
+      label: version.label,
+      createdAt: version.createdAt,
+      createdBy: version.createdBy,
+      rowCount: rows.length,
+      checksumSha256: getCsvIntegrity(csv).checksumSha256,
+      summary: `${rows.length} mapped rows · ${version.rows.filter((row) => row.reviewStatus === "needs_review").length} need review`,
+    },
+    columns: ["cleaned_publisher_name", "publisher_id", "publisher_name", "revenue_multiplier"],
+    rows: rows.map((row) => [row.cleanedPublisherName, row.publisherId, row.publisherName, row.revenueMultiplier]),
   };
 }

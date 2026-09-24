@@ -997,6 +997,74 @@ textarea {
   margin: 0;
 }
 
+.source-version-browser {
+  margin-top: 18px;
+}
+
+.source-version-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.source-version-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fbfcfd;
+  padding: 13px;
+}
+
+.source-version-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.source-version-card-heading p,
+.source-version-card > p {
+  color: var(--text-muted);
+  margin: 5px 0 0;
+}
+
+.source-version-card .action-strip {
+  margin-top: 11px;
+}
+
+.source-version-pager {
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.version-detail-summary {
+  margin-bottom: 18px;
+}
+
+.version-search-field {
+  min-width: min(100%, 300px);
+}
+
+.selected-input-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 12px 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.selected-input-summary a,
+.full-mapping-lineage a {
+  color: var(--primary);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.selected-input-summary a:hover,
+.full-mapping-lineage a:hover {
+  text-decoration: underline;
+}
+
 .full-mapping-catalog {
   display: grid;
   gap: 12px;

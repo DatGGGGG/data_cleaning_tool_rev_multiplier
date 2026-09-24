@@ -11,11 +11,11 @@ import type {
   BottomUpRowDraft,
   BottomUpStep1PublisherRow,
   BottomUpStep1VersionSnapshot,
-  BottomUpVersionSnapshot,
   BottomUpWorkbenchState,
 } from "@/lib/bottom-up/types";
 import { createEmptyBottomUpRow, formatAuditDate } from "@/lib/bottom-up/workbench";
 import { appApiPath } from "@/lib/app-path";
+import { SourceVersionBrowser } from "@/components/source-version-browser";
 
 type BottomUpEditorProps = {
   initialState: BottomUpWorkbenchState;
@@ -412,7 +412,6 @@ export function BottomUpEditor({
   const completedProductionSyncRef = useRef("");
 
   const latestLogs: BottomUpActivityLogEntry[] = state.logs.slice(0, 6);
-  const latestVersions: BottomUpVersionSnapshot[] = state.versions.slice(0, 4);
   const latestStep1Versions: BottomUpStep1VersionSnapshot[] = state.step1Versions.slice(0, 6);
   const productionSync = state.productionSync;
   const productionSyncIsRunning = productionSync.status === "queued" || productionSync.status === "running";
@@ -1905,18 +1904,6 @@ export function BottomUpEditor({
             </div>
           </section> : null}
           <section className="surface-card">
-            <div className="section-heading"><h2>Recent Versions</h2></div>
-            <div className="list-stack">
-              {latestVersions.length === 0 ? <div className="list-card muted-text">No versions saved yet.</div> : latestVersions.map((version) => (
-                <div key={version.id} className="list-card">
-                  <strong>{version.label}</strong>
-                  <p>{new Date(version.createdAt).toLocaleString()}</p>
-                  <span>{version.rowCount} rows captured</span>
-                </div>
-              ))}
-            </div>
-          </section>
-          <section className="surface-card">
             <div className="section-heading"><h2>Activity Log</h2></div>
             <div className="list-stack">
               {latestLogs.map((entry) => (
@@ -1930,6 +1917,7 @@ export function BottomUpEditor({
           </section>
         </div>
       </section>
+      <SourceVersionBrowser workflow="bottom_up" refreshKey={state.versions.length} />
     </div>
   );
 }

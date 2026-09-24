@@ -54,6 +54,17 @@ export type MappingArtifactActiveResponse = {
   active: MappingArtifactActiveState;
 };
 
+export type MappingArtifactCsvPreview = {
+  artifact: MappingArtifact;
+  columns: string[];
+  rows: string[][];
+  totalRows: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  search: string;
+};
+
 export type MappingArtifactActivationResponse = MappingArtifactActiveResponse & {
   status: string;
 };

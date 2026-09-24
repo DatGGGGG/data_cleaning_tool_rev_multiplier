@@ -4,11 +4,11 @@ import Link from "next/link";
 import { startTransition, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { appApiPath } from "@/lib/app-path";
+import { SourceVersionBrowser } from "@/components/source-version-browser";
 import type {
   ActivityLogEntry,
   PublisherOverviewRow,
   TopDownOverviewState,
-  TopDownVersionSnapshot,
 } from "@/lib/top-down/types";
 
 type WorkbenchOverviewProps = {
@@ -29,7 +29,6 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
   const [statusMessage, setStatusMessage] = useState("Overview ready.");
 
   const latestLogs: ActivityLogEntry[] = state.logs.slice(0, 8);
-  const latestVersions: TopDownVersionSnapshot[] = state.versions.slice(0, 6);
   const requiresNewVersion = state.versionFreshness.hasUnversionedChanges;
 
   useEffect(() => {
@@ -281,28 +280,6 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
           <section className="surface-card">
             <div className="section-heading">
               <div>
-                <h2>Recent Versions</h2>
-                <p>Latest snapshots for rollback and traceability.</p>
-              </div>
-            </div>
-            <div className="list-stack">
-              {latestVersions.length === 0 ? (
-                <div className="list-card muted-text">No versions saved yet.</div>
-              ) : (
-                latestVersions.map((version) => (
-                  <div key={version.id} className="list-card">
-                    <strong>{version.label}</strong>
-                    <p>{new Date(version.createdAt).toLocaleString()}</p>
-                    <span>{version.publisherCount} publishers captured</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-
-          <section className="surface-card">
-            <div className="section-heading">
-              <div>
                 <h2>Activity Log</h2>
                 <p>Meaningful operator actions only.</p>
               </div>
@@ -322,6 +299,7 @@ export function WorkbenchOverview({ initialState }: WorkbenchOverviewProps) {
           </section>
         </div>
       </section>
+      <SourceVersionBrowser workflow="top_down" refreshKey={state.versions.length} />
     </div>
   );
 }

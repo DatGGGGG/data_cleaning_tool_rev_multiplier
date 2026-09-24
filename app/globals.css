@@ -365,6 +365,86 @@ textarea {
   margin-left: auto;
 }
 
+.enrichment-job-card {
+  margin-top: 14px;
+  border: 1px solid var(--line-strong);
+  border-left: 4px solid #7aa7c7;
+  border-radius: var(--radius-sm);
+  background: #f8fbfe;
+  padding: 14px;
+}
+
+.enrichment-job-running,
+.enrichment-job-queued {
+  border-left-color: var(--accent);
+}
+
+.enrichment-job-success {
+  border-left-color: #25824c;
+  background: #f5fcf7;
+}
+
+.enrichment-job-failed,
+.enrichment-job-interrupted {
+  border-left-color: var(--danger);
+  background: #fff8f8;
+}
+
+.enrichment-job-heading,
+.enrichment-job-details {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.enrichment-job-heading strong {
+  font-size: 1rem;
+}
+
+.enrichment-job-heading .field-label {
+  margin: 0 0 4px;
+}
+
+.enrichment-job-status {
+  border: 1px solid #b9cde0;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 5px 9px;
+  text-transform: uppercase;
+}
+
+.enrichment-job-details {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 14px 0 8px;
+}
+
+.enrichment-job-details div {
+  min-width: 0;
+}
+
+.enrichment-job-details dt {
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.enrichment-job-details dd {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .audit-search {
   display: flex;
   align-items: center;
@@ -2187,6 +2267,10 @@ textarea {
 }
 
 @media (max-width: 900px) {
+  .enrichment-job-details {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .topbar {
     height: auto;
     padding: 14px 16px;

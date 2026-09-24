@@ -72,6 +72,26 @@ export type MappingArtifactJob = {
   finished_at: string | null;
 };
 
+export type MappingArtifactJobResume = {
+  job: MappingArtifactJob;
+  sourceArtifactId: string;
+};
+
+export type StoredTopDownEnrichmentJob = {
+  remoteJobId: string;
+  sourceArtifactId: string;
+  localTopDownVersionId: string;
+  status: MappingArtifactJobStatus;
+  resultArtifactId: string | null;
+  errorCode: string | null;
+  errorSummary: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+  actor: string;
+};
+
 export type MappingArtifactReadiness = {
   uiEnabled: boolean;
   mutationsEnabled: boolean;
@@ -109,17 +129,7 @@ export type MappingArtifactWorkbenchStore = {
   schemaVersion: 1;
   updatedAt: string;
   publications: MappingArtifactPublicationReceipt[];
-  generationJobs: Array<{
-    remoteJobId: string;
-    sourceArtifactId: string;
-    localTopDownVersionId: string;
-    status: MappingArtifactJobStatus;
-    resultArtifactId: string | null;
-    errorCode: string | null;
-    errorSummary: string | null;
-    createdAt: string;
-    updatedAt: string;
-  }>;
+  generationJobs: StoredTopDownEnrichmentJob[];
   selections: {
     topDownWithPublisherIdsArtifactId: string | null;
     bottomUpArtifactId: string | null;

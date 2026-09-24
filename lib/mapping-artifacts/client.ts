@@ -1,4 +1,8 @@
 import { MappingArtifactWorkbenchError } from "@/lib/mapping-artifacts/errors";
+import {
+  normalizeArtifactJobResponse,
+  normalizeStartedEnrichmentResponse,
+} from "@/lib/mapping-artifacts/job-contract";
 import type {
   MappingArtifact,
   MappingArtifactActivationResponse,
@@ -118,15 +122,25 @@ export function publishRemoteArtifact(input: {
   });
 }
 
-export function startRemoteTopDownEnrichment(sourceArtifactId: string, actor: string) {
-  return requestPipeline<{ job_id: string; status: string }>("/mapping-artifacts/generate/top-down-publisher-ids", {
+export async function startRemoteTopDownEnrichment(sourceArtifactId: string, actor: string) {
+  const payload = await requestPipeline<unknown>("/mapping-artifacts/generate/top-down-publisher-ids", {
     method: "POST",
     body: JSON.stringify({ source_artifact_id: sourceArtifactId, created_by: actor }),
   });
+  const job = normalizeStartedEnrichmentResponse(payload);
+  if (!job) {
+    throw new MappingArtifactWorkbenchError("upstream_invalid_response", "The SensorTower service returned an invalid enrichment job response.", 502);
+  }
+  return job;
 }
 
-export function getRemoteArtifactJob(jobId: string) {
-  return requestPipeline<{ job: MappingArtifactJob }>(`/mapping-artifacts/jobs/${artifactIdPathPart(jobId)}`);
+export async function getRemoteArtifactJob(jobId: string) {
+  const payload = await requestPipeline<unknown>(`/mapping-artifacts/jobs/${artifactIdPathPart(jobId)}`);
+  const job = normalizeArtifactJobResponse(payload);
+  if (!job) {
+    throw new MappingArtifactWorkbenchError("upstream_invalid_response", "The SensorTower service returned an invalid enrichment job status.", 502);
+  }
+  return job;
 }
 
 export function generateRemoteFull(input: { topDownArtifactId: string; bottomUpArtifactId: string; actor: string }) {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { appApiPath } from "@/lib/app-path";
 import type { BottomUpVersionMetadata } from "@/lib/bottom-up/types";
 import type { TopDownVersionFreshness, TopDownVersionMetadata } from "@/lib/top-down/types";
@@ -13,12 +13,17 @@ import {
   resolveFullMappingLineage,
   type FullMappingLineageSource,
 } from "@/lib/mapping-artifacts/catalog";
+import {
+  normalizeArtifactJobResponse,
+  normalizeStartedEnrichmentResponse,
+} from "@/lib/mapping-artifacts/job-contract";
 import type {
   MappingArtifact,
   MappingArtifactActivationResponse,
   MappingArtifactActiveResponse,
   MappingArtifactActiveState,
   MappingArtifactJob,
+  MappingArtifactJobResume,
   MappingArtifactReadiness,
 } from "@/lib/mapping-artifacts/types";
 
@@ -26,11 +31,13 @@ type Props = {
   topDownVersions: TopDownVersionMetadata[];
   bottomUpVersions: BottomUpVersionMetadata[];
   topDownVersionFreshness: TopDownVersionFreshness;
+  enrichmentResumeJob: MappingArtifactJobResume | null;
 };
 type CatalogResponse = { artifacts: MappingArtifact[] };
 
-function short(value: string) { return value.length > 12 ? `${value.slice(0, 12)}…` : value; }
+function short(value: string | null | undefined) { return value ? (value.length > 12 ? `${value.slice(0, 12)}…` : value) : "—"; }
 function date(value: string | null) { return value ? new Date(value).toLocaleString() : "—"; }
+function enrichmentIsActive(job: MappingArtifactJob | null) { return job?.status === "queued" || job?.status === "running"; }
 
 function sourceDescription(source: FullMappingLineageSource) {
   if (source.artifact) return `${short(source.artifact.id)} · ${source.artifact.row_count} rows · ${short(source.artifact.checksum_sha256)}`;
@@ -38,19 +45,23 @@ function sourceDescription(source: FullMappingLineageSource) {
   return "Not recorded";
 }
 
-export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDownVersionFreshness }: Props) {
+export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDownVersionFreshness, enrichmentResumeJob }: Props) {
   const [readiness, setReadiness] = useState<MappingArtifactReadiness | null>(null);
   const [artifacts, setArtifacts] = useState<MappingArtifact[]>([]);
   const [activeState, setActiveState] = useState<MappingArtifactActiveState | null>(null);
   const [topDownArtifactId, setTopDownArtifactId] = useState("");
   const [bottomUpArtifactId, setBottomUpArtifactId] = useState("");
-  const [rawTopDownArtifactId, setRawTopDownArtifactId] = useState("");
-  const [enrichmentJob, setEnrichmentJob] = useState<MappingArtifactJob | null>(null);
+  const [rawTopDownArtifactId, setRawTopDownArtifactId] = useState(enrichmentResumeJob?.sourceArtifactId ?? "");
+  const [enrichmentJob, setEnrichmentJob] = useState<MappingArtifactJob | null>(enrichmentResumeJob?.job ?? null);
+  const [enrichmentSourceArtifactId, setEnrichmentSourceArtifactId] = useState(enrichmentResumeJob?.sourceArtifactId ?? "");
   const [enrichedDraft, setEnrichedDraft] = useState<MappingArtifact | null>(null);
+  const [enrichmentPollingError, setEnrichmentPollingError] = useState<string | null>(null);
   const [generatedFull, setGeneratedFull] = useState<MappingArtifact | null>(null);
   const [message, setMessage] = useState("Checking Mapping Artifact readiness…");
   const [busy, setBusy] = useState(false);
   const [activatingArtifactId, setActivatingArtifactId] = useState<string | null>(null);
+  const loadedEnrichedDraftArtifactId = useRef<string | null>(null);
+  const enrichmentJobIdRef = useRef<string | null>(enrichmentResumeJob?.job.id ?? null);
 
   const enrichedTopDown = useMemo(
     () => artifacts.filter((item) => item.artifact_type === "top_down_with_publisher_ids" && item.status === "committed"),
@@ -95,24 +106,62 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
 
   useEffect(() => { void refreshRemote().catch((error) => setMessage(error instanceof Error ? error.message : "Failed to check readiness.")); }, []);
 
+  useEffect(() => { enrichmentJobIdRef.current = enrichmentJob?.id ?? null; }, [enrichmentJob?.id]);
+
+  async function loadEnrichedDraft(artifactId: string, refreshCatalog = true) {
+    const detailResponse = await fetch(appApiPath(`/api/mapping-artifacts/artifacts/${artifactId}`), { cache: "no-store" });
+    const detail = await parse(detailResponse) as { artifact?: MappingArtifact };
+    if (!detail.artifact) throw new Error("The server returned an invalid generated artifact.");
+    setEnrichedDraft(detail.artifact);
+    if (refreshCatalog) await refreshRemote();
+  }
+
+  async function refreshEnrichmentStatus(job: MappingArtifactJob, isCurrent = () => true) {
+    try {
+      const response = await fetch(appApiPath(`/api/mapping-artifacts/jobs/${job.id}`), { cache: "no-store" });
+      const payload = normalizeArtifactJobResponse(await parse(response));
+      if (!payload) throw new Error("The server returned an invalid enrichment job status.");
+      if (!isCurrent()) return;
+      setEnrichmentJob(payload.job);
+      setEnrichmentPollingError(null);
+      if (payload.job.status === "success" && payload.job.result_artifact_id) {
+        loadedEnrichedDraftArtifactId.current = payload.job.result_artifact_id;
+        await loadEnrichedDraft(payload.job.result_artifact_id);
+        if (!isCurrent()) return;
+        setMessage("Apps + Publisher IDs draft is ready for review.");
+      } else if (payload.job.status === "failed" || payload.job.status === "interrupted") {
+        setMessage(`Top Down enrichment ${payload.job.status}. Review the job details, then generate again when ready.`);
+      }
+    } catch (error) {
+      if (!isCurrent()) return;
+      const detail = error instanceof Error ? error.message : "Could not refresh enrichment status.";
+      setEnrichmentPollingError(detail);
+      setMessage("Could not refresh the enrichment job. The remote job has not been marked failed; retry its status.");
+    }
+  }
+
+  useEffect(() => {
+    if (!enrichmentJob?.result_artifact_id || enrichmentJob.status !== "success" || loadedEnrichedDraftArtifactId.current === enrichmentJob.result_artifact_id) return;
+    let current = true;
+    loadedEnrichedDraftArtifactId.current = enrichmentJob.result_artifact_id;
+    void loadEnrichedDraft(enrichmentJob.result_artifact_id)
+      .then(() => { if (current) setMessage("Recovered the completed Apps + Publisher IDs draft."); })
+      .catch((error) => { if (current) setEnrichmentPollingError(error instanceof Error ? error.message : "Could not load the completed draft."); });
+    return () => { current = false; };
+  }, [enrichmentJob?.result_artifact_id, enrichmentJob?.status]);
+
   useEffect(() => {
     if (!enrichmentJob || (enrichmentJob.status !== "queued" && enrichmentJob.status !== "running")) return;
-    const timer = window.setTimeout(async () => {
-      try {
-        const response = await fetch(appApiPath(`/api/mapping-artifacts/jobs/${enrichmentJob.id}`), { cache: "no-store" });
-        const payload = await parse(response) as { job: MappingArtifactJob };
-        setEnrichmentJob(payload.job);
-        if (payload.job.status === "success" && payload.job.result_artifact_id) {
-          const detailResponse = await fetch(appApiPath(`/api/mapping-artifacts/artifacts/${payload.job.result_artifact_id}`), { cache: "no-store" });
-          const detail = await parse(detailResponse) as { artifact: MappingArtifact };
-          setEnrichedDraft(detail.artifact);
-          setMessage("Apps + Publisher IDs draft is ready for review.");
-          await refreshRemote();
-        }
-      } catch (error) { setMessage(error instanceof Error ? error.message : "Could not refresh enrichment status."); }
-    }, enrichmentJob.status === "queued" ? 2_000 : 5_000);
-    return () => window.clearTimeout(timer);
-  }, [enrichmentJob]);
+    const job = enrichmentJob;
+    let current = true;
+    const timer = window.setTimeout(() => {
+      void refreshEnrichmentStatus(job, () => current);
+    }, job.status === "queued" ? 2_000 : 5_000);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [enrichmentJob?.id, enrichmentJob?.status]);
 
   async function publish(workflow: "top-down" | "bottom-up", versionId: string) {
     setBusy(true);
@@ -143,8 +192,8 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
     finally { setBusy(false); }
   }
 
-  async function startEnrichment() {
-    const source = committedRawTopDown.find((item) => item.id === rawTopDownArtifactId);
+  async function startEnrichment(sourceArtifactId = rawTopDownArtifactId) {
+    const source = committedRawTopDown.find((item) => item.id === sourceArtifactId);
     if (!source) return;
     setBusy(true);
     try {
@@ -152,11 +201,23 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sourceArtifactId: source.id, localTopDownVersionId: source.source_workbench_version_id || "" }),
       });
-      const payload = await parse(response) as { job_id: string; status: MappingArtifactJob["status"] };
-      setEnrichmentJob({ id: payload.job_id, job_type: "top_down_publisher_ids", status: payload.status, result_artifact_id: null, error_code: null, error_summary: null, created_at: new Date().toISOString(), started_at: null, finished_at: null });
+      const payload = normalizeStartedEnrichmentResponse(await parse(response));
+      if (!payload) throw new Error("The server returned an invalid enrichment job response.");
+      const createdAt = new Date().toISOString();
+      setRawTopDownArtifactId(source.id);
+      setEnrichmentSourceArtifactId(source.id);
+      setEnrichedDraft(null);
+      setEnrichmentPollingError(null);
+      loadedEnrichedDraftArtifactId.current = null;
+      setEnrichmentJob({ id: payload.job_id, job_type: "top_down_publisher_ids", status: payload.status, result_artifact_id: null, error_code: null, error_summary: null, created_at: createdAt, started_at: null, finished_at: null });
       setMessage("Top Down enrichment was queued. This page will poll its durable job status.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not start Top Down enrichment."); }
     finally { setBusy(false); }
+  }
+
+  async function retryEnrichmentStatus() {
+    if (!enrichmentJob) return;
+    await refreshEnrichmentStatus(enrichmentJob, () => enrichmentJobIdRef.current === enrichmentJob.id);
   }
 
   async function commit(artifactId: string) {
@@ -164,8 +225,14 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
     try {
       const response = await fetch(appApiPath(`/api/mapping-artifacts/artifacts/${artifactId}/commit`), { method: "POST" });
       const payload = await parse(response);
-      setGeneratedFull(payload.artifact ?? null);
-      setMessage("Committed immutable Full Mapping artifact.");
+      if (!payload.artifact) throw new Error("The server returned an invalid committed artifact.");
+      if (enrichedDraft?.id === artifactId) {
+        setEnrichedDraft(payload.artifact);
+        setMessage("Committed immutable Apps + Publisher IDs artifact.");
+      } else {
+        setGeneratedFull(payload.artifact);
+        setMessage("Committed immutable Full Mapping artifact.");
+      }
       await refreshRemote();
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not commit artifact."); }
     finally { setBusy(false); }
@@ -211,10 +278,22 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
       <div className="side-column"><section className="surface-card"><div className="section-heading"><div><h2>Active Full Mapping</h2><p>Scheduled artifact-mode ETL uses this version only.</p></div></div>{activeFull ? <div className="list-card"><strong>{short(activeFull.artifact.id)}</strong><p>{activeFull.artifact.row_count} rows · {short(activeFull.artifact.checksum_sha256)}</p><span>Activated {date(activeFull.activated_at)} by {activeFull.activated_by || "—"}</span></div> : <p className="muted-text">No active Full Mapping is available.</p>}</section></div>
     </section>
 
-    <section className="surface-card"><div className="section-heading"><div><h2>2. Generate Apps + Publisher IDs</h2><p>The SensorTower service performs this enrichment asynchronously. Unresolved IDs remain in the downloadable draft and block commit.</p></div></div>
-      <div className="settings-grid"><label className="settings-field"><span>Committed raw Top Down</span><select value={rawTopDownArtifactId} onChange={(event) => setRawTopDownArtifactId(event.target.value)} disabled={!readiness?.authenticated || busy}><option value="">Select committed raw Top Down</option>{committedRawTopDown.map((item) => <option key={item.id} value={item.id}>{short(item.id)} · {item.row_count} rows · {short(item.checksum_sha256)}</option>)}</select></label></div>
-      <div className="action-strip"><button className="button button-primary" type="button" disabled={!canPublish || !rawTopDownArtifactId || Boolean(enrichmentJob && (enrichmentJob.status === "queued" || enrichmentJob.status === "running"))} onClick={() => void startEnrichment()}>Generate Publisher IDs</button>{enrichmentJob ? <span className="status-inline">Job {short(enrichmentJob.id)}: {enrichmentJob.status}{enrichmentJob.error_summary ? ` — ${enrichmentJob.error_summary}` : ""}</span> : null}</div>
-      {enrichedDraft ? <div className="list-card"><strong>Apps + Publisher IDs draft: {short(enrichedDraft.id)}</strong><p>{enrichedDraft.row_count} rows · unresolved publisher IDs: {enrichedDraft.validation.unresolved_publisher_id_count}</p>{enrichedDraft.validation.blocking_errors.length ? <p className="error-text">Correct the Top Down source, save a new version, publish it, and generate a new draft. {enrichedDraft.validation.blocking_errors.join(" ")}</p> : <p className="muted-text">Validation passed.</p>}<div className="action-strip"><a className="button button-secondary" href={appApiPath(`/api/mapping-artifacts/artifacts/${enrichedDraft.id}/download`)}>Download Draft</a><button className="button button-secondary" type="button" disabled={!canCommit || enrichedDraft.status !== "draft" || enrichedDraft.validation.blocking_errors.length > 0} onClick={() => void commit(enrichedDraft.id)}>Commit Apps + Publisher IDs</button></div></div> : null}
+    <section className="surface-card">
+      <div className="section-heading"><div><h2>2. Generate Apps + Publisher IDs</h2><p>The SensorTower service performs this enrichment asynchronously. Unresolved IDs remain in the downloadable draft and block commit.</p></div></div>
+      <div className="settings-grid"><label className="settings-field"><span>Committed raw Top Down</span><select value={rawTopDownArtifactId} onChange={(event) => setRawTopDownArtifactId(event.target.value)} disabled={!readiness?.authenticated || busy || enrichmentIsActive(enrichmentJob)}><option value="">Select committed raw Top Down</option>{committedRawTopDown.map((item) => <option key={item.id} value={item.id}>{short(item.id)} · {item.row_count} rows · {short(item.checksum_sha256)}</option>)}</select></label></div>
+      <div className="action-strip"><button className="button button-primary" type="button" disabled={!canPublish || !rawTopDownArtifactId || enrichmentIsActive(enrichmentJob)} onClick={() => void startEnrichment()}>{enrichmentJob?.status === "failed" || enrichmentJob?.status === "interrupted" ? "Generate Again" : "Generate Publisher IDs"}</button></div>
+      {enrichmentJob ? <article className={`enrichment-job-card enrichment-job-${enrichmentJob.status}`} aria-live="polite">
+        <div className="enrichment-job-heading"><div><p className="field-label">Top Down enrichment job</p><strong>{short(enrichmentJob.id)}</strong></div><span className="enrichment-job-status">{enrichmentJob.status}</span></div>
+        <dl className="enrichment-job-details"><div><dt>Source artifact</dt><dd title={enrichmentSourceArtifactId || undefined}>{short(enrichmentSourceArtifactId)}</dd></div><div><dt>Created</dt><dd>{date(enrichmentJob.created_at)}</dd></div><div><dt>Started</dt><dd>{date(enrichmentJob.started_at)}</dd></div><div><dt>Finished</dt><dd>{date(enrichmentJob.finished_at)}</dd></div></dl>
+        {enrichmentJob.error_summary ? <p className="error-text">{enrichmentJob.error_summary}</p> : null}
+        {enrichmentPollingError ? <p className="error-text">Status check failed: {enrichmentPollingError}</p> : null}
+        <div className="action-strip">
+          {enrichmentIsActive(enrichmentJob) ? <span className="muted-text">Status refreshes automatically every {enrichmentJob.status === "queued" ? "2" : "5"} seconds.</span> : null}
+          {canRead ? <button className="button button-secondary button-inline" type="button" disabled={busy} onClick={() => void retryEnrichmentStatus()}>Retry Status</button> : null}
+          {(enrichmentJob.status === "failed" || enrichmentJob.status === "interrupted") ? <button className="button button-primary button-inline" type="button" disabled={!canPublish || !enrichmentSourceArtifactId || enrichmentIsActive(enrichmentJob)} onClick={() => void startEnrichment(enrichmentSourceArtifactId)}>Generate Again</button> : null}
+        </div>
+      </article> : null}
+      {enrichedDraft ? <div className="list-card"><strong>Apps + Publisher IDs {enrichedDraft.status}: {short(enrichedDraft.id)}</strong><p>{enrichedDraft.row_count} rows · unresolved publisher IDs: {enrichedDraft.validation.unresolved_publisher_id_count}</p>{enrichedDraft.validation.blocking_errors.length ? <p className="error-text">Correct the Top Down source, save a new version, publish it, and generate a new draft. {enrichedDraft.validation.blocking_errors.join(" ")}</p> : <p className="muted-text">Validation passed.</p>}<div className="action-strip"><a className="button button-secondary" href={appApiPath(`/api/mapping-artifacts/artifacts/${enrichedDraft.id}/download`)}>Download Draft</a><button className="button button-secondary" type="button" disabled={!canCommit || enrichedDraft.status !== "draft" || enrichedDraft.validation.blocking_errors.length > 0} onClick={() => void commit(enrichedDraft.id)}>Commit Apps + Publisher IDs</button></div></div> : null}
     </section>
 
     <section className="surface-card"><div className="section-heading"><div><h2>3. Generate and review Full Mapping</h2><p>Select explicit committed inputs. The workbench never chooses the newest artifact automatically.</p></div></div>

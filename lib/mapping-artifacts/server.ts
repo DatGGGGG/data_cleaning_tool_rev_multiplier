@@ -13,13 +13,17 @@ import {
 import { MappingArtifactWorkbenchError } from "@/lib/mapping-artifacts/errors";
 import {
   createIntegrationLog,
+  interruptMissingGenerationJob,
   mutateMappingArtifactStore,
+  publicGenerationJob,
   readMappingArtifactStore,
+  reconcileGenerationJob,
+  recordGenerationJobReuse,
   saveGenerationJob,
   savePublicationReceipt,
-  updateGenerationJob,
 } from "@/lib/mapping-artifacts/store";
-import type { MappingArtifactType } from "@/lib/mapping-artifacts/types";
+import { isActiveEnrichmentJobStatus } from "@/lib/mapping-artifacts/job-contract";
+import type { MappingArtifactJobResume, MappingArtifactType, StoredTopDownEnrichmentJob } from "@/lib/mapping-artifacts/types";
 import { exportBottomUpVersionCsv, listBottomUpVersions } from "@/lib/bottom-up/server";
 import { exportTopDownVersionCsv, getTopDownVersionFreshness, listTopDownVersions } from "@/lib/top-down/server";
 import type { WorkbenchPrincipal } from "@/lib/mapping-artifacts/auth";
@@ -42,6 +46,44 @@ function requireNonemptyCsv(csv: string, workflow: string) {
   }
 }
 
+const COMPLETED_RESUME_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
+declare global { var __topDownEnrichmentStartLock: Promise<void> | undefined; }
+
+async function withTopDownEnrichmentStartLock<T>(work: () => Promise<T>) {
+  const prior = globalThis.__topDownEnrichmentStartLock ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  globalThis.__topDownEnrichmentStartLock = prior.then(() => current);
+  await prior;
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}
+
+function newestJob(jobs: StoredTopDownEnrichmentJob[]) {
+  return [...jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
+}
+
+export function relevantTopDownEnrichmentJob(
+  jobs: StoredTopDownEnrichmentJob[],
+  publishedRawTopDownArtifactIds: string[],
+  now = Date.now(),
+): MappingArtifactJobResume | null {
+  const relevant = jobs.filter((job) => publishedRawTopDownArtifactIds.includes(job.sourceArtifactId));
+  const active = newestJob(relevant.filter((job) => isActiveEnrichmentJobStatus(job.status)));
+  if (active) return { job: publicGenerationJob(active), sourceArtifactId: active.sourceArtifactId };
+
+  const recentSuccess = newestJob(relevant.filter((job) => {
+    if (job.status !== "success" || !job.resultArtifactId) return false;
+    const updatedAt = Date.parse(job.updatedAt);
+    return !Number.isNaN(updatedAt) && now - updatedAt <= COMPLETED_RESUME_WINDOW_MS;
+  }));
+  return recentSuccess ? { job: publicGenerationJob(recentSuccess), sourceArtifactId: recentSuccess.sourceArtifactId } : null;
+}
+
 export async function getMappingArtifactDashboard() {
   const [local, topDownVersions, bottomUpVersions, topDownVersionFreshness] = await Promise.all([
     readMappingArtifactStore(),
@@ -49,7 +91,16 @@ export async function getMappingArtifactDashboard() {
     listBottomUpVersions(),
     getTopDownVersionFreshness(),
   ]);
-  return { local, topDownVersions, bottomUpVersions, topDownVersionFreshness };
+  const publishedRawTopDownArtifactIds = local.publications
+    .filter((publication) => publication.workflow === "top_down" && publication.remoteArtifactType === "top_down_raw")
+    .map((publication) => publication.remoteArtifactId);
+  return {
+    local,
+    topDownVersions,
+    bottomUpVersions,
+    topDownVersionFreshness,
+    enrichmentResumeJob: relevantTopDownEnrichmentJob(local.generationJobs, publishedRawTopDownArtifactIds),
+  };
 }
 
 export async function getRemoteArtifactCatalog(filters: { type?: MappingArtifactType; status?: string } = {}) {
@@ -103,23 +154,63 @@ export async function publishSavedBottomUpVersion(versionId: string, principal: 
 }
 
 export async function startTopDownEnrichment(sourceArtifactId: string, localTopDownVersionId: string, principal: WorkbenchPrincipal) {
-  const local = await readMappingArtifactStore();
-  const duplicate = local.generationJobs.find((job) => job.sourceArtifactId === sourceArtifactId && (job.status === "queued" || job.status === "running"));
-  if (duplicate) throw new MappingArtifactWorkbenchError("job_in_progress", "An enrichment job is already running for this Top Down artifact.", 409);
-  const job = await startRemoteTopDownEnrichment(sourceArtifactId, principal.displayName);
-  await saveGenerationJob({ remoteJobId: job.job_id, sourceArtifactId, localTopDownVersionId, status: job.status === "running" ? "running" : "queued", resultArtifactId: null, errorCode: null, errorSummary: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, principal.displayName);
-  return job;
+  return withTopDownEnrichmentStartLock(async () => {
+    const local = await readMappingArtifactStore();
+    const candidates = local.generationJobs
+      .filter((job) => job.sourceArtifactId === sourceArtifactId && isActiveEnrichmentJobStatus(job.status))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+
+    for (const candidate of candidates) {
+      try {
+        const remote = await getRemoteArtifactJob(candidate.remoteJobId);
+        const reconciled = await reconcileGenerationJob(remote.job, principal.displayName);
+        if (isActiveEnrichmentJobStatus(remote.job.status)) {
+          await recordGenerationJobReuse(reconciled ?? candidate, principal.displayName);
+          return { job_id: remote.job.id, status: remote.job.status };
+        }
+      } catch (error) {
+        if (error instanceof MappingArtifactWorkbenchError && error.status === 404) {
+          await interruptMissingGenerationJob(candidate, principal.displayName);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    const job = await startRemoteTopDownEnrichment(sourceArtifactId, principal.displayName);
+    const startedAt = new Date().toISOString();
+    await saveGenerationJob({
+      remoteJobId: job.job_id,
+      sourceArtifactId,
+      localTopDownVersionId,
+      status: job.status,
+      resultArtifactId: null,
+      errorCode: null,
+      errorSummary: null,
+      createdAt: startedAt,
+      startedAt: job.status === "running" ? startedAt : null,
+      finishedAt: null,
+      updatedAt: startedAt,
+      actor: principal.displayName,
+    }, principal.displayName);
+    return job;
+  });
 }
 
 export async function refreshTopDownEnrichmentJob(jobId: string) {
-  const remote = await getRemoteArtifactJob(jobId);
-  await updateGenerationJob(jobId, {
-    status: remote.job.status,
-    resultArtifactId: remote.job.result_artifact_id,
-    errorCode: remote.job.error_code,
-    errorSummary: remote.job.error_summary,
-  });
-  return remote;
+  const local = await readMappingArtifactStore();
+  const stored = local.generationJobs.find((job) => job.remoteJobId === jobId) ?? null;
+  try {
+    const remote = await getRemoteArtifactJob(jobId);
+    await reconcileGenerationJob(remote.job, stored?.actor);
+    return remote;
+  } catch (error) {
+    if (stored && error instanceof MappingArtifactWorkbenchError && error.status === 404) {
+      const interrupted = await interruptMissingGenerationJob(stored, stored.actor);
+      if (interrupted) return { job: publicGenerationJob(interrupted) };
+    }
+    throw error;
+  }
 }
 
 export async function createFullMapping(topDownArtifactId: string, bottomUpArtifactId: string, principal: WorkbenchPrincipal) {

@@ -445,6 +445,56 @@ textarea {
   white-space: nowrap;
 }
 
+.enrichment-progress {
+  height: 8px;
+  margin: 12px 0 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dce7f0;
+}
+
+.enrichment-progress-indicator {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.enrichment-progress-queued .enrichment-progress-indicator,
+.enrichment-progress-running .enrichment-progress-indicator {
+  animation: enrichment-progress-slide 1.25s ease-in-out infinite;
+}
+
+.enrichment-progress-success .enrichment-progress-indicator {
+  width: 100%;
+  background: #25824c;
+}
+
+.enrichment-progress-failed,
+.enrichment-progress-interrupted {
+  background: #f4d4d4;
+}
+
+.enrichment-progress-failed .enrichment-progress-indicator,
+.enrichment-progress-interrupted .enrichment-progress-indicator {
+  width: 100%;
+  background: var(--danger);
+}
+
+@keyframes enrichment-progress-slide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(365%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enrichment-progress-queued .enrichment-progress-indicator,
+  .enrichment-progress-running .enrichment-progress-indicator {
+    animation: none;
+    transform: translateX(80%);
+  }
+}
+
 .audit-search {
   display: flex;
   align-items: center;

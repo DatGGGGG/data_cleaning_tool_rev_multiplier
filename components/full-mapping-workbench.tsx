@@ -17,6 +17,11 @@ import {
   normalizeArtifactJobResponse,
   normalizeStartedEnrichmentResponse,
 } from "@/lib/mapping-artifacts/job-contract";
+import {
+  enrichmentPollDelay,
+  enrichmentProgressLabel,
+  isActiveEnrichmentStatus,
+} from "@/lib/mapping-artifacts/polling";
 import type {
   MappingArtifact,
   MappingArtifactActivationResponse,
@@ -37,7 +42,8 @@ type CatalogResponse = { artifacts: MappingArtifact[] };
 
 function short(value: string | null | undefined) { return value ? (value.length > 12 ? `${value.slice(0, 12)}…` : value) : "—"; }
 function date(value: string | null) { return value ? new Date(value).toLocaleString() : "—"; }
-function enrichmentIsActive(job: MappingArtifactJob | null) { return job?.status === "queued" || job?.status === "running"; }
+function enrichmentIsActive(job: MappingArtifactJob | null) { return job ? isActiveEnrichmentStatus(job.status) : false; }
+function requestWasAborted(error: unknown) { return error instanceof Error && error.name === "AbortError"; }
 
 function sourceDescription(source: FullMappingLineageSource) {
   if (source.artifact) return `${short(source.artifact.id)} · ${source.artifact.row_count} rows · ${short(source.artifact.checksum_sha256)}`;
@@ -116,27 +122,19 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
     if (refreshCatalog) await refreshRemote();
   }
 
-  async function refreshEnrichmentStatus(job: MappingArtifactJob, isCurrent = () => true) {
-    try {
-      const response = await fetch(appApiPath(`/api/mapping-artifacts/jobs/${job.id}`), { cache: "no-store" });
-      const payload = normalizeArtifactJobResponse(await parse(response));
-      if (!payload) throw new Error("The server returned an invalid enrichment job status.");
-      if (!isCurrent()) return;
-      setEnrichmentJob(payload.job);
-      setEnrichmentPollingError(null);
-      if (payload.job.status === "success" && payload.job.result_artifact_id) {
-        loadedEnrichedDraftArtifactId.current = payload.job.result_artifact_id;
-        await loadEnrichedDraft(payload.job.result_artifact_id);
-        if (!isCurrent()) return;
-        setMessage("Apps + Publisher IDs draft is ready for review.");
-      } else if (payload.job.status === "failed" || payload.job.status === "interrupted") {
-        setMessage(`Top Down enrichment ${payload.job.status}. Review the job details, then generate again when ready.`);
-      }
-    } catch (error) {
-      if (!isCurrent()) return;
-      const detail = error instanceof Error ? error.message : "Could not refresh enrichment status.";
-      setEnrichmentPollingError(detail);
-      setMessage("Could not refresh the enrichment job. The remote job has not been marked failed; retry its status.");
+  async function fetchEnrichmentStatus(jobId: string, signal?: AbortSignal) {
+    const response = await fetch(appApiPath(`/api/mapping-artifacts/jobs/${jobId}`), { cache: "no-store", signal });
+    const payload = normalizeArtifactJobResponse(await parse(response));
+    if (!payload) throw new Error("The server returned an invalid enrichment job status.");
+    return payload.job;
+  }
+
+  function applyEnrichmentStatus(job: MappingArtifactJob) {
+    setEnrichmentJob(job);
+    setEnrichmentPollingError(null);
+    if (job.status === "success") setMessage("Apps + Publisher IDs draft is ready for review.");
+    else if (job.status === "failed" || job.status === "interrupted") {
+      setMessage(`Top Down enrichment ${job.status}. Review the job details, then generate again when ready.`);
     }
   }
 
@@ -145,21 +143,70 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
     let current = true;
     loadedEnrichedDraftArtifactId.current = enrichmentJob.result_artifact_id;
     void loadEnrichedDraft(enrichmentJob.result_artifact_id)
-      .then(() => { if (current) setMessage("Recovered the completed Apps + Publisher IDs draft."); })
+      .then(() => { if (current) setMessage("Apps + Publisher IDs draft is ready for review."); })
       .catch((error) => { if (current) setEnrichmentPollingError(error instanceof Error ? error.message : "Could not load the completed draft."); });
     return () => { current = false; };
   }, [enrichmentJob?.result_artifact_id, enrichmentJob?.status]);
 
   useEffect(() => {
-    if (!enrichmentJob || (enrichmentJob.status !== "queued" && enrichmentJob.status !== "running")) return;
-    const job = enrichmentJob;
+    if (!enrichmentJob || !enrichmentIsActive(enrichmentJob)) return;
+
+    const jobId = enrichmentJob.id;
     let current = true;
-    const timer = window.setTimeout(() => {
-      void refreshEnrichmentStatus(job, () => current);
-    }, job.status === "queued" ? 2_000 : 5_000);
+    let timer: number | null = null;
+    let request: AbortController | null = null;
+    let requestInFlight = false;
+    let consecutiveFailures = 0;
+    let lastKnownStatus = enrichmentJob.status;
+
+    const schedule = (delay: number) => {
+      if (!current) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => { void poll(); }, delay);
+    };
+
+    const poll = async () => {
+      if (!current || requestInFlight) return;
+      requestInFlight = true;
+      request = new AbortController();
+      try {
+        const nextJob = await fetchEnrichmentStatus(jobId, request.signal);
+        if (!current || enrichmentJobIdRef.current !== jobId) return;
+        lastKnownStatus = nextJob.status;
+        consecutiveFailures = 0;
+        applyEnrichmentStatus(nextJob);
+        const nextDelay = enrichmentPollDelay(nextJob.status);
+        if (nextDelay !== null) schedule(nextDelay);
+      } catch (error) {
+        if (!current || requestWasAborted(error)) return;
+        consecutiveFailures += 1;
+        const detail = error instanceof Error ? error.message : "Could not refresh enrichment status.";
+        setEnrichmentPollingError(detail);
+        setMessage("Status check failed. Reconnecting automatically…");
+        const nextDelay = enrichmentPollDelay(lastKnownStatus, consecutiveFailures);
+        if (nextDelay !== null) schedule(nextDelay);
+      } finally {
+        requestInFlight = false;
+        request = null;
+      }
+    };
+
+    const refreshImmediately = () => {
+      if (!requestInFlight) schedule(0);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshImmediately();
+    };
+
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("online", refreshImmediately);
+    schedule(0);
     return () => {
       current = false;
-      window.clearTimeout(timer);
+      if (timer !== null) window.clearTimeout(timer);
+      request?.abort();
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("online", refreshImmediately);
     };
   }, [enrichmentJob?.id, enrichmentJob?.status]);
 
@@ -213,11 +260,6 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
       setMessage("Top Down enrichment was queued. This page will poll its durable job status.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not start Top Down enrichment."); }
     finally { setBusy(false); }
-  }
-
-  async function retryEnrichmentStatus() {
-    if (!enrichmentJob) return;
-    await refreshEnrichmentStatus(enrichmentJob, () => enrichmentJobIdRef.current === enrichmentJob.id);
   }
 
   async function commit(artifactId: string) {
@@ -285,11 +327,11 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
       {enrichmentJob ? <article className={`enrichment-job-card enrichment-job-${enrichmentJob.status}`} aria-live="polite">
         <div className="enrichment-job-heading"><div><p className="field-label">Top Down enrichment job</p><strong>{short(enrichmentJob.id)}</strong></div><span className="enrichment-job-status">{enrichmentJob.status}</span></div>
         <dl className="enrichment-job-details"><div><dt>Source artifact</dt><dd title={enrichmentSourceArtifactId || undefined}>{short(enrichmentSourceArtifactId)}</dd></div><div><dt>Created</dt><dd>{date(enrichmentJob.created_at)}</dd></div><div><dt>Started</dt><dd>{date(enrichmentJob.started_at)}</dd></div><div><dt>Finished</dt><dd>{date(enrichmentJob.finished_at)}</dd></div></dl>
+        <div className={`enrichment-progress enrichment-progress-${enrichmentJob.status}`} role="progressbar" aria-label="Apps and Publisher IDs generation progress" aria-valuetext={enrichmentProgressLabel(enrichmentJob.status, enrichmentPollingError ? 1 : 0)} aria-valuemin={enrichmentJob.status === "success" ? 0 : undefined} aria-valuemax={enrichmentJob.status === "success" ? 100 : undefined} aria-valuenow={enrichmentJob.status === "success" ? 100 : undefined} aria-busy={enrichmentIsActive(enrichmentJob)}><span className="enrichment-progress-indicator" /></div>
         {enrichmentJob.error_summary ? <p className="error-text">{enrichmentJob.error_summary}</p> : null}
-        {enrichmentPollingError ? <p className="error-text">Status check failed: {enrichmentPollingError}</p> : null}
+        {enrichmentPollingError ? <p className="error-text">Status check failed: {enrichmentPollingError}. Reconnecting automatically.</p> : null}
         <div className="action-strip">
-          {enrichmentIsActive(enrichmentJob) ? <span className="muted-text">Status refreshes automatically every {enrichmentJob.status === "queued" ? "2" : "5"} seconds.</span> : null}
-          {canRead ? <button className="button button-secondary button-inline" type="button" disabled={busy} onClick={() => void retryEnrichmentStatus()}>Retry Status</button> : null}
+          {enrichmentIsActive(enrichmentJob) ? <span className="muted-text">{enrichmentProgressLabel(enrichmentJob.status, enrichmentPollingError ? 1 : 0)}</span> : null}
           {(enrichmentJob.status === "failed" || enrichmentJob.status === "interrupted") ? <button className="button button-primary button-inline" type="button" disabled={!canPublish || !enrichmentSourceArtifactId || enrichmentIsActive(enrichmentJob)} onClick={() => void startEnrichment(enrichmentSourceArtifactId)}>Generate Again</button> : null}
         </div>
       </article> : null}

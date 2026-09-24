@@ -2,6 +2,7 @@ import type {
   MappingArtifact,
   MappingArtifactActiveEntry,
   MappingArtifactActiveState,
+  MappingArtifactPublicationReceipt,
   MappingArtifactType,
 } from "@/lib/mapping-artifacts/types";
 
@@ -22,6 +23,13 @@ export type FullMappingLineageSource = ArtifactLineageSource & {
 export type FullMappingLineage = {
   enrichedTopDown: FullMappingLineageSource;
   bottomUp: FullMappingLineageSource;
+};
+
+export type PublishedSavedVersion = {
+  artifactId: string;
+  status: "committed";
+  publishedAt: string | null;
+  publishedBy: string | null;
 };
 
 function timestamp(value: string | null) {
@@ -49,6 +57,45 @@ export function committedArtifacts(artifacts: MappingArtifact[]) {
 
 export function committedFullArtifacts(artifacts: MappingArtifact[]) {
   return committedArtifacts(artifacts).filter((artifact) => artifact.artifact_type === "full");
+}
+
+export function publishedSavedVersion(
+  workflow: "top_down" | "bottom_up",
+  versionId: string,
+  checksumSha256: string,
+  artifacts: MappingArtifact[],
+  receipts: MappingArtifactPublicationReceipt[] = [],
+): PublishedSavedVersion | null {
+  const expectedType = workflow === "top_down" ? "top_down_raw" : "bottom_up";
+  const remote = artifacts.find((artifact) => (
+    artifact.artifact_type === expectedType
+    && artifact.status === "committed"
+    && artifact.source_workbench_workflow === workflow
+    && artifact.source_workbench_version_id === versionId
+    && artifact.checksum_sha256 === checksumSha256
+  ));
+  if (remote) {
+    return {
+      artifactId: remote.id,
+      status: "committed",
+      publishedAt: remote.committed_at || remote.created_at,
+      publishedBy: remote.committed_by || remote.created_by,
+    };
+  }
+
+  const receipt = receipts.find((item) => (
+    item.workflow === workflow
+    && item.localVersionId === versionId
+    && item.localChecksumSha256 === checksumSha256
+    && item.remoteArtifactType === expectedType
+    && item.remoteStatus === "committed"
+  ));
+  return receipt ? {
+    artifactId: receipt.remoteArtifactId,
+    status: receipt.remoteStatus,
+    publishedAt: receipt.publishedAt,
+    publishedBy: receipt.publishedBy,
+  } : null;
 }
 
 export function artifactSearchText(artifact: MappingArtifact) {

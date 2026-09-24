@@ -10,6 +10,7 @@ import {
   activationConfirmationMessage,
   committedFullArtifacts,
   isActiveFullArtifact,
+  publishedSavedVersion,
   resolveFullMappingLineage,
   type FullMappingLineageSource,
 } from "@/lib/mapping-artifacts/catalog";
@@ -29,6 +30,7 @@ import type {
   MappingArtifactActiveState,
   MappingArtifactJob,
   MappingArtifactJobResume,
+  MappingArtifactPublicationReceipt,
   MappingArtifactReadiness,
 } from "@/lib/mapping-artifacts/types";
 
@@ -37,6 +39,7 @@ type Props = {
   bottomUpVersions: BottomUpVersionMetadata[];
   topDownVersionFreshness: TopDownVersionFreshness;
   enrichmentResumeJob: MappingArtifactJobResume | null;
+  publicationReceipts: MappingArtifactPublicationReceipt[];
 };
 type CatalogResponse = { artifacts: MappingArtifact[] };
 
@@ -51,7 +54,7 @@ function sourceDescription(source: FullMappingLineageSource) {
   return "Not recorded";
 }
 
-export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDownVersionFreshness, enrichmentResumeJob }: Props) {
+export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDownVersionFreshness, enrichmentResumeJob, publicationReceipts }: Props) {
   const [readiness, setReadiness] = useState<MappingArtifactReadiness | null>(null);
   const [artifacts, setArtifacts] = useState<MappingArtifact[]>([]);
   const [activeState, setActiveState] = useState<MappingArtifactActiveState | null>(null);
@@ -313,8 +316,14 @@ export function FullMappingWorkbench({ topDownVersions, bottomUpVersions, topDow
     <section className="content-grid">
       <div className="surface-card"><div className="section-heading"><div><h2>1. Publish saved source versions</h2><p>Only immutable saved versions can be sent to SensorTower. Local CSV export alone does not publish anything.</p></div></div>
         {topDownVersionFreshness.hasUnversionedChanges ? <div className="version-freshness-warning" role="status"><div><strong>Top Down has newer working changes</strong><p>The saved versions below do not contain the latest Top Down edits. Save a new version before publishing unless you intentionally need an older snapshot.</p></div><Link className="button button-primary button-inline" href="/">Return to Top Down</Link></div> : null}
-        <h3>Top Down saved versions</h3><div className="list-stack">{topDownVersions.slice(0, 6).map((version) => <div className="list-card" key={version.id}><strong>{version.label}</strong><p>{version.flattenedAppCount} flattened apps · {short(version.checksumSha256)}</p><button className="button button-secondary" type="button" disabled={!canPublish} onClick={() => void publish("top-down", version.id)}>Publish Saved Version</button></div>)}{topDownVersions.length === 0 ? <p className="muted-text">Save a Top Down version first.</p> : null}</div>
-        <h3>Bottom Up saved versions</h3><div className="list-stack">{bottomUpVersions.slice(0, 6).map((version) => <div className="list-card" key={version.id}><strong>{version.label}</strong><p>{version.mappedRowCount} mapped rows · {short(version.checksumSha256)}</p><button className="button button-secondary" type="button" disabled={!canPublish} onClick={() => void publish("bottom-up", version.id)}>Publish Saved Version</button></div>)}{bottomUpVersions.length === 0 ? <p className="muted-text">Save a Bottom Up version first.</p> : null}</div>
+        <h3>Top Down saved versions</h3><div className="list-stack">{topDownVersions.slice(0, 6).map((version) => {
+          const published = publishedSavedVersion("top_down", version.id, version.checksumSha256, artifacts, publicationReceipts);
+          return <div className="list-card" key={version.id}><strong>{version.label}</strong><p>{version.flattenedAppCount} flattened apps · {short(version.checksumSha256)}</p><button className="button button-secondary" type="button" disabled={Boolean(published) || !canPublish} onClick={() => void publish("top-down", version.id)}>{published ? "Published" : "Publish Saved Version"}</button>{published ? <span className="muted-text">Artifact {short(published.artifactId)} · committed</span> : null}</div>;
+        })}{topDownVersions.length === 0 ? <p className="muted-text">Save a Top Down version first.</p> : null}</div>
+        <h3>Bottom Up saved versions</h3><div className="list-stack">{bottomUpVersions.slice(0, 6).map((version) => {
+          const published = publishedSavedVersion("bottom_up", version.id, version.checksumSha256, artifacts, publicationReceipts);
+          return <div className="list-card" key={version.id}><strong>{version.label}</strong><p>{version.mappedRowCount} mapped rows · {short(version.checksumSha256)}</p><button className="button button-secondary" type="button" disabled={Boolean(published) || !canPublish} onClick={() => void publish("bottom-up", version.id)}>{published ? "Published" : "Publish Saved Version"}</button>{published ? <span className="muted-text">Artifact {short(published.artifactId)} · committed</span> : null}</div>;
+        })}{bottomUpVersions.length === 0 ? <p className="muted-text">Save a Bottom Up version first.</p> : null}</div>
       </div>
 
       <div className="side-column"><section className="surface-card"><div className="section-heading"><div><h2>Active Full Mapping</h2><p>Scheduled artifact-mode ETL uses this version only.</p></div></div>{activeFull ? <div className="list-card"><strong>{short(activeFull.artifact.id)}</strong><p>{activeFull.artifact.row_count} rows · {short(activeFull.artifact.checksum_sha256)}</p><span>Activated {date(activeFull.activated_at)} by {activeFull.activated_by || "—"}</span></div> : <p className="muted-text">No active Full Mapping is available.</p>}</section></div>

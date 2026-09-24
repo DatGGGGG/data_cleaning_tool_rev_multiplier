@@ -94,3 +94,37 @@ test("pipeline activation response preserves its active pointer shape and an act
     else process.env.SENSORTOWER_PIPELINE_API_SERVICE_TOKEN = originalToken;
   }
 });
+
+test("saved versions are marked published only when workflow, version, type, and checksum match", async () => {
+  const { publishedSavedVersion } = await import("../lib/mapping-artifacts/catalog.ts");
+  const topDown = artifact({
+    id: topDownId,
+    artifact_type: "top_down_raw",
+    checksum_sha256: "top-checksum",
+    source_workbench_workflow: "top_down",
+    source_workbench_version_id: "top-version-1",
+  });
+  assert.equal(
+    publishedSavedVersion("top_down", "top-version-1", "top-checksum", [topDown])?.artifactId,
+    topDownId,
+  );
+  assert.equal(publishedSavedVersion("top_down", "top-version-1", "changed", [topDown]), null);
+  assert.equal(publishedSavedVersion("bottom_up", "top-version-1", "top-checksum", [topDown]), null);
+
+  const receipt = {
+    workflow: "bottom_up",
+    localVersionId: "bottom-version-1",
+    localVersionLabel: "Bottom snapshot",
+    localChecksumSha256: "bottom-checksum",
+    remoteArtifactId: bottomUpId,
+    remoteArtifactType: "bottom_up",
+    remoteStatus: "committed",
+    publishedAt: "2026-09-24T10:00:00.000Z",
+    publishedBy: "Operator",
+  };
+  assert.equal(
+    publishedSavedVersion("bottom_up", "bottom-version-1", "bottom-checksum", [], [receipt])?.artifactId,
+    bottomUpId,
+  );
+  assert.equal(publishedSavedVersion("bottom_up", "bottom-version-1", "wrong-checksum", [], [receipt]), null);
+});

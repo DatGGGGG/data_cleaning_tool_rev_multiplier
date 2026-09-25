@@ -480,6 +480,94 @@ textarea {
   flex-wrap: wrap;
 }
 
+.special-cases-workflow-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.special-cases-workflow-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.special-cases-anchor-section {
+  scroll-margin-top: 78px;
+}
+
+.special-cases-section-sidebar {
+  position: sticky;
+  top: 68px;
+  z-index: 8;
+  overflow: hidden;
+  border: 1px solid var(--border, #dbe3ed);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 4px 16px rgba(31, 55, 84, 0.08);
+}
+
+.special-cases-section-sidebar > p {
+  margin: 0;
+  padding: 14px 14px 10px;
+  color: var(--text-muted, #6b778c);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.special-cases-section-sidebar nav {
+  display: grid;
+  padding: 0 7px 8px;
+}
+
+.special-cases-section-sidebar a {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: var(--text-muted, #56657a);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.special-cases-section-sidebar a:hover {
+  background: #f2f6fb;
+  color: #174f83;
+}
+
+.special-cases-section-sidebar a span {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #c9d6e3;
+  border-radius: 50%;
+  background: #fff;
+  color: #47627e;
+  font-size: 0.72rem;
+}
+
+.special-cases-section-sidebar a.active {
+  background: #eaf3fc;
+  color: #123f6b;
+}
+
+.special-cases-section-sidebar a.active span {
+  border-color: #245f98;
+  background: #245f98;
+  color: #fff;
+}
+
 .special-cases-controls .settings-field {
   min-width: min(620px, 100%);
   flex: 1 1 420px;
@@ -2485,6 +2573,22 @@ textarea {
 }
 
 @media (max-width: 1180px) {
+  .special-cases-workflow-layout {
+    grid-template-columns: 168px minmax(0, 1fr);
+  }
+
+  .special-cases-section-sidebar a {
+    grid-template-columns: 25px minmax(0, 1fr);
+    gap: 6px;
+    padding-inline: 6px;
+    font-size: 0.77rem;
+  }
+
+  .special-cases-section-sidebar a span {
+    width: 23px;
+    height: 23px;
+  }
+
   .content-grid,
   .stats-grid {
     grid-template-columns: 1fr;
@@ -2553,6 +2657,43 @@ textarea {
 }
 
 @media (max-width: 900px) {
+  .special-cases-workflow-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .special-cases-section-sidebar {
+    top: 0;
+    width: 100%;
+    overflow-x: auto;
+    border-radius: 7px;
+  }
+
+  .special-cases-section-sidebar > p {
+    display: none;
+  }
+
+  .special-cases-section-sidebar nav {
+    display: flex;
+    width: max-content;
+    min-width: 100%;
+    padding: 6px;
+  }
+
+  .special-cases-section-sidebar a {
+    grid-template-columns: 23px auto;
+    min-height: 36px;
+    white-space: nowrap;
+  }
+
+  .special-cases-workflow-content {
+    width: 100%;
+  }
+
+  .special-cases-anchor-section {
+    scroll-margin-top: 58px;
+  }
+
   .enrichment-job-details {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

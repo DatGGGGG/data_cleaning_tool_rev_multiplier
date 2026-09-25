@@ -74,6 +74,69 @@ export function normalizeBottomUpRows(rows: unknown): BottomUpRowDraft[] {
   return rows.map((row, index) => normalizeBottomUpRow(row as Partial<BottomUpRowDraft>, index + 1));
 }
 
+export type BottomUpMultiplierCorrection = {
+  rowId: string;
+  cleanedPublisherName: string;
+  previousMultiplier: string;
+  resolvedMultiplier: string;
+};
+
+export type BottomUpMultiplierResolution = {
+  rows: BottomUpRowDraft[];
+  corrections: BottomUpMultiplierCorrection[];
+  unknownCleanedPublisherNames: string[];
+};
+
+/**
+ * Publisher Management owns the standard revenue multiplier.  Bottom Up rows
+ * carry a denormalized copy only so CSV snapshots remain self-contained.
+ */
+export function resolveBottomUpRevenueMultipliers(
+  rows: BottomUpRowDraft[],
+  registeredPublisherMultipliers: Map<string, string>,
+): BottomUpMultiplierResolution {
+  const corrections: BottomUpMultiplierCorrection[] = [];
+  const unknown = new Set<string>();
+  const resolvedRows = rows.map((row, index) => {
+    const normalized = normalizeBottomUpRow(row, index + 1);
+    const cleanedPublisherKey = normalized.cleanedPublisherName.toLowerCase();
+    if (!cleanedPublisherKey) return normalized;
+    const registeredMultiplier = registeredPublisherMultipliers.get(cleanedPublisherKey);
+    if (!registeredMultiplier) {
+      unknown.add(normalized.cleanedPublisherName);
+      return normalized;
+    }
+    if (normalized.revenueMultiplier !== registeredMultiplier) {
+      corrections.push({
+        rowId: normalized.id,
+        cleanedPublisherName: normalized.cleanedPublisherName,
+        previousMultiplier: normalized.revenueMultiplier,
+        resolvedMultiplier: registeredMultiplier,
+      });
+    }
+    return { ...normalized, revenueMultiplier: registeredMultiplier };
+  });
+  return {
+    rows: resolvedRows,
+    corrections,
+    unknownCleanedPublisherNames: [...unknown].sort((left, right) => left.localeCompare(right)),
+  };
+}
+
+export function findBottomUpMultiplierConflicts(rows: BottomUpRowDraft[]) {
+  const valuesByKey = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!row.cleanedPublisherName || !row.publisherId) continue;
+    const key = `${row.cleanedPublisherName.trim().toLowerCase()}\u0000${row.publisherId.trim()}`;
+    const values = valuesByKey.get(key) ?? new Set<string>();
+    values.add(row.revenueMultiplier.trim());
+    valuesByKey.set(key, values);
+  }
+  return [...valuesByKey.entries()]
+    .filter(([, multipliers]) => multipliers.size > 1)
+    .map(([key, multipliers]) => ({ key, multipliers: [...multipliers].sort() }));
+}
+
 function parseCsv(text: string): ParsedCsvRow[] {
   const rows: string[][] = [];
   let current = "";

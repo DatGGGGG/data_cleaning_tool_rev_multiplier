@@ -24,10 +24,12 @@ import type {
 import {
   buildBottomUpCsv,
   buildBottomUpStep1PublisherCsv,
+  findBottomUpMultiplierConflicts,
   importBottomUpRowsFromCsv,
   normalizeBottomUpRow,
   normalizeBottomUpRows,
   normalizeText,
+  resolveBottomUpRevenueMultipliers,
   upsertRowsByPublisherId,
 } from "@/lib/bottom-up/workbench";
 import { getCsvIntegrity, VersionNotFoundError } from "@/lib/version-api";
@@ -1405,6 +1407,26 @@ function shouldKeepBottomUpRow(row: BottomUpRowDraft) {
   return hasUsefulMapping && !isUnreviewedProductionDump;
 }
 
+async function resolveRegisteredBottomUpRows(rows: BottomUpRowDraft[]) {
+  const topDownState = await getTopDownWorkbenchState("system");
+  const multipliers = new Map(
+    topDownState.publishers
+      .map((publisher) => [publisher.name.trim().toLowerCase(), publisher.revenueMultiplier.trim()] as const)
+      .filter(([publisherName, revenueMultiplier]) => Boolean(publisherName && revenueMultiplier)),
+  );
+  const resolution = resolveBottomUpRevenueMultipliers(rows, multipliers);
+  if (resolution.unknownCleanedPublisherNames.length) {
+    throw new Error(
+      `Bottom Up references cleaned publishers that are not registered: ${resolution.unknownCleanedPublisherNames.join(", ")}.`,
+    );
+  }
+  const conflicts = findBottomUpMultiplierConflicts(resolution.rows);
+  if (conflicts.length) {
+    throw new Error(`${conflicts.length} Bottom Up publisher mapping keys have conflicting revenue multipliers.`);
+  }
+  return resolution;
+}
+
 function makeWorkbenchState(
   store: PersistedStore,
   operatorName: string,
@@ -1766,50 +1788,60 @@ export async function saveBottomUpRows(
   operatorName: string,
   checkedPublisherNames?: string[],
 ) {
-  return mutateStore((store) => {
-    store.rows = rows.map((row, index) => normalizeBottomUpRow(row, index + 1));
+  return mutateStore(async (store) => {
+    const resolution = await resolveRegisteredBottomUpRows(
+      rows.map((row, index) => normalizeBottomUpRow(row, index + 1)),
+    );
+    store.rows = resolution.rows;
     if (checkedPublisherNames) {
       store.checkedPublisherNames = [...new Set(checkedPublisherNames.map(normalizeText).filter(Boolean))].sort(
         (left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }),
       );
     }
     appendLogs(store, [
-      createLog("save_bottom_up_rows", operatorName, "dataset", DATASET_ID, `Saved ${store.rows.length} bottom-up rows.`),
+      createLog(
+        "save_bottom_up_rows",
+        operatorName,
+        "dataset",
+        DATASET_ID,
+        `Saved ${store.rows.length} bottom-up rows${resolution.corrections.length ? `; synchronized ${resolution.corrections.length} revenue multiplier${resolution.corrections.length === 1 ? "" : "s"} from Publisher Management` : ""}.`,
+      ),
     ]);
     return makeWorkbenchState(store, operatorName);
   });
 }
 
 export async function importBottomUpCsvFile(fileName: string, mimeType: string, bytes: Uint8Array, operatorName: string) {
-  const store = await readStore();
   const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
   const storedFileName = `${Date.now()}_${safeName}`;
   const storedPath = path.join(IMPORTS_DIR, storedFileName);
   await fs.writeFile(storedPath, bytes);
 
   const importedRows = importBottomUpRowsFromCsv(Buffer.from(bytes).toString("utf-8"));
-  const mergeResult = upsertRowsByPublisherId(store.rows, importedRows);
-  store.rows = mergeResult.rows;
-  store.artifacts.unshift({
-    id: createEntityId("artifact"),
-    kind: "import_csv",
-    originalName: fileName,
-    storagePath: storedPath,
-    mimeType,
-    createdAt: nowIso(),
-    createdBy: operatorName,
+  return mutateStore(async (store) => {
+    const mergeResult = upsertRowsByPublisherId(store.rows, importedRows);
+    const resolution = await resolveRegisteredBottomUpRows(mergeResult.rows);
+    store.rows = resolution.rows;
+    store.artifacts.unshift({
+      id: createEntityId("artifact"),
+      kind: "import_csv",
+      originalName: fileName,
+      storagePath: storedPath,
+      mimeType,
+      createdAt: nowIso(),
+      createdBy: operatorName,
+    });
+    appendLogs(store, [
+      createLog(
+        "import_bottom_up_csv",
+        operatorName,
+        "dataset",
+        DATASET_ID,
+        `Imported ${importedRows.length} rows (${mergeResult.replacedCount} replaced, ${mergeResult.insertedCount} inserted)${resolution.corrections.length ? `; synchronized ${resolution.corrections.length} revenue multipliers from Publisher Management` : ""}.`,
+      ),
+    ]);
+    return makeWorkbenchState(store, operatorName);
   });
-  appendLogs(store, [
-    createLog(
-      "import_bottom_up_csv",
-      operatorName,
-      "dataset",
-      DATASET_ID,
-      `Imported ${importedRows.length} rows (${mergeResult.replacedCount} replaced, ${mergeResult.insertedCount} inserted).`,
-    ),
-  ]);
-  await writeStore(store);
-  return makeWorkbenchState(store, operatorName);
 }
 
 async function updateProductionSyncProgress(
@@ -2072,20 +2104,8 @@ export async function syncBottomUpFromProduction(operatorName: string) {
 
 export async function exportBottomUpCsv(operatorName: string) {
   const store = await readStore();
-  const topDownState = await getTopDownWorkbenchState(operatorName);
-  const revenueMultiplierByPublisher = new Map(
-    topDownState.publishers.map((publisher) => [
-      publisher.name.trim().toLowerCase(),
-      publisher.revenueMultiplier.trim() || "1",
-    ]),
-  );
-  const exportRows = store.rows
-    .filter((row) => row.cleanedPublisherName && row.publisherId && row.publisherName)
-    .map((row) => ({
-      ...row,
-      revenueMultiplier:
-        revenueMultiplierByPublisher.get(row.cleanedPublisherName.trim().toLowerCase()) ?? row.revenueMultiplier,
-    }));
+  const resolution = await resolveRegisteredBottomUpRows(store.rows);
+  const exportRows = resolution.rows.filter((row) => row.cleanedPublisherName && row.publisherId && row.publisherName);
   const csv = buildBottomUpCsv(exportRows);
   const fileName = `mapping_publisher_to_publisherids_revenue_multiplier_bottom_up_${Date.now()}.csv`;
   const storedPath = path.join(EXPORTS_DIR, fileName);
@@ -2108,21 +2128,29 @@ export async function exportBottomUpCsv(operatorName: string) {
 }
 
 export async function createBottomUpVersion(operatorName: string) {
-  const store = await readStore();
-  const version: PersistedVersion = {
-    id: createEntityId("version"),
-    label: `Snapshot ${new Date().toLocaleString()}`,
-    createdAt: nowIso(),
-    createdBy: operatorName,
-    rowCount: store.rows.length,
-    rows: structuredClone(store.rows),
-  };
-  store.versions.unshift(version);
-  appendLogs(store, [
-    createLog("save_bottom_up_version", operatorName, "dataset_version", version.id, `Captured ${version.rowCount} rows.`),
-  ]);
-  await writeStore(store);
-  return makeWorkbenchState(store, operatorName);
+  return mutateStore(async (store) => {
+    const resolution = await resolveRegisteredBottomUpRows(store.rows);
+    store.rows = resolution.rows;
+    const version: PersistedVersion = {
+      id: createEntityId("version"),
+      label: `Snapshot ${new Date().toLocaleString()}`,
+      createdAt: nowIso(),
+      createdBy: operatorName,
+      rowCount: store.rows.length,
+      rows: structuredClone(store.rows),
+    };
+    store.versions.unshift(version);
+    appendLogs(store, [
+      createLog(
+        "save_bottom_up_version",
+        operatorName,
+        "dataset_version",
+        version.id,
+        `Captured ${version.rowCount} rows${resolution.corrections.length ? ` after synchronizing ${resolution.corrections.length} revenue multiplier${resolution.corrections.length === 1 ? "" : "s"} from Publisher Management` : ""}.`,
+      ),
+    ]);
+    return makeWorkbenchState(store, operatorName);
+  });
 }
 
 export async function listBottomUpVersions(): Promise<BottomUpVersionMetadata[]> {

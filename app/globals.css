@@ -707,6 +707,18 @@ textarea {
   min-width: 190px;
 }
 
+.special-cases-historical-final {
+  display: grid;
+  gap: 6px;
+  min-width: 145px;
+}
+
+.small-button {
+  justify-self: start;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 .pagination-controls {
   justify-content: end;
   align-items: center;

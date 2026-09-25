@@ -7,6 +7,7 @@ import {
   saveAppReviews,
   savePublisherReviews,
   setComparisonSourceVersion,
+  setSelectedFinalBaselineVersion,
 } from "@/lib/special-cases/server";
 
 function failure(error: unknown) {
@@ -45,11 +46,14 @@ export async function POST(request: Request) {
       sourceVersionId?: string | null;
       baseBaselineSourceVersionId?: string;
       appFullInfoSourceVersionId?: string;
+      finalVersionId?: string | null;
       entries?: never[];
       historicalVersionId?: string | null;
     };
     if (body.action === "set_comparison")
       await setComparisonSourceVersion(body.sourceVersionId ?? null);
+    else if (body.action === "set_final_baseline")
+      await setSelectedFinalBaselineVersion(body.finalVersionId ?? null);
     else if (body.action === "create_cumulative_baseline") {
       if (!body.baseBaselineSourceVersionId)
         throw new Error(
@@ -78,14 +82,12 @@ export async function POST(request: Request) {
         throw new Error("A source version is required.");
       await saveAppReviews(
         body.sourceVersionId,
-        (body.entries ?? []) as Parameters<typeof saveAppReviews>[1],
+        body.finalVersionId ?? null,
+        (body.entries ?? []) as Parameters<typeof saveAppReviews>[2],
         principal.displayName,
       );
     } else if (body.action === "create_final") {
-      const version = await createSpecialCaseFinalVersion(
-        body.historicalVersionId ?? null,
-        principal.displayName,
-      );
+      const version = await createSpecialCaseFinalVersion(principal.displayName);
       return NextResponse.json({ version });
     } else throw new Error("Unsupported Special Cases action.");
     return NextResponse.json(

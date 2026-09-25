@@ -53,6 +53,10 @@ export type SpecialCaseAppReview = {
 
 export type SpecialCaseInvestigationRow = SpecialCaseSourceRow & {
   isNewApp: boolean;
+  isNewSpecialCase: boolean;
+  isHistoricalFinal: boolean;
+  historicalCleanedPublisherName: string;
+  historicalRevenueMultiplier: string;
   isSuspected: boolean;
   isChecked: boolean;
   needReadjustment: boolean;
@@ -86,9 +90,12 @@ export type SpecialCaseFinalVersion = {
   createdBy: string;
   rowCount: number;
   checksum: string;
-  sourceVersionId: string;
-  fullArtifactId: string;
+  sourceVersionId: string | null;
+  fullArtifactId: string | null;
   historicalVersionId: string | null;
+  versionType: "generated" | "uploaded_history";
+  originalFilename: string | null;
+  importedRowCount: number | null;
 };
 
 export type SpecialCaseJob = {
@@ -113,6 +120,7 @@ export type SpecialCasesOverview = {
   finalVersions: SpecialCaseFinalVersion[];
   currentSourceVersionId: string | null;
   comparisonSourceVersionId: string | null;
+  selectedFinalBaselineVersionId: string | null;
   activeFullArtifactId: string | null;
   publisherGroups: SpecialCasePublisherGroup[];
   knownCleanedPublishers: string[];

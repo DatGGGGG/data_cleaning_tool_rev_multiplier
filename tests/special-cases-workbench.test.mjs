@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adjustmentRows, buildFinalCsv, investigationRows } from "../lib/special-cases/workbench.ts";
+import { adjustmentRows, buildFinalCsv, finalWorkingRows, investigationRows } from "../lib/special-cases/workbench.ts";
 
 const base = { appId: "app-1", name: "Example", url: "", publisherId: "pub-1", publisherName: "Suspicious", cleanedPublisherName: "VNG", revenueMultiplier: "15" };
 
@@ -18,4 +18,19 @@ test("clear publisher is explicit and serializes as a blank cleaned publisher", 
 test("set publisher requires a nonblank publisher and positive multiplier", () => {
   const result = adjustmentRows([{ ...base, isNewApp: false, isSuspected: true, isChecked: true, needReadjustment: true, adjustmentMode: "set", adjustedCleanedPublisherName: "", adjustedRevenueMultiplier: "0", notes: "" }]);
   assert.equal(result.errors.length, 2);
+});
+
+test("historical final rows remain editable while new Special Cases start excluded", () => {
+  const rows = finalWorkingRows(
+    [{ ...base, appId: "old" }, { ...base, appId: "new" }],
+    new Set(),
+    { Suspicious: { publisherName: "Suspicious", isSuspected: true, isChecked: true, notes: "", updatedAt: "", updatedBy: "" } },
+    {},
+    [{ appId: "old", cleanedPublisherName: "", revenueMultiplier: "1" }, { appId: "not-in-current", cleanedPublisherName: "VNG", revenueMultiplier: "15" }],
+  );
+  assert.equal(rows.find((row) => row.appId === "old")?.needReadjustment, true);
+  assert.equal(rows.find((row) => row.appId === "old")?.adjustmentMode, "clear");
+  assert.equal(rows.find((row) => row.appId === "not-in-current")?.needReadjustment, true);
+  assert.equal(rows.find((row) => row.appId === "new")?.isNewSpecialCase, true);
+  assert.equal(rows.find((row) => row.appId === "new")?.needReadjustment, false);
 });

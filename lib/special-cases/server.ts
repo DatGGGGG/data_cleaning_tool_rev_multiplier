@@ -20,6 +20,7 @@ import type {
   SpecialCaseSourceVersion,
   SpecialCasesOverview,
 } from "@/lib/special-cases/types";
+import { HistoricalFinalImportError, parseHistoricalFinalCsv } from "@/lib/special-cases/final-import";
 import {
   HISTORICAL_BASELINE_MAX_BYTES,
   HistoricalBaselineImportError,
@@ -30,6 +31,7 @@ import {
   buildFinalCsv,
   buildSourceCsv,
   cumulativeBaselineRows,
+  finalWorkingRows,
   investigationRows,
   publisherGroups,
   sha256,
@@ -46,11 +48,12 @@ const id = (prefix: string) =>
 const now = () => new Date().toISOString();
 
 type Store = {
-  schemaVersion: 1;
+  schemaVersion: number;
   sourceVersions: SpecialCaseSourceVersion[];
   finalVersions: SpecialCaseFinalVersion[];
   currentSourceVersionId: string | null;
   comparisonSourceVersionId: string | null;
+  selectedFinalBaselineVersionId: string | null;
   publisherReviews: Record<string, SpecialCasePublisherReview>;
   reviewsBySource: Record<string, Record<string, SpecialCaseAppReview>>;
 };
@@ -66,6 +69,7 @@ function emptyStore(): Store {
     finalVersions: [],
     currentSourceVersionId: null,
     comparisonSourceVersionId: null,
+    selectedFinalBaselineVersionId: null,
     publisherReviews: {},
     reviewsBySource: {},
   };
@@ -110,9 +114,22 @@ function normalizeSourceVersion(
     overlappingAppCount: source.overlappingAppCount ?? null,
   };
 }
+function normalizeFinalVersion(version: SpecialCaseFinalVersion): SpecialCaseFinalVersion {
+  return {
+    ...version,
+    sourceVersionId: version.sourceVersionId ?? null,
+    fullArtifactId: version.fullArtifactId ?? null,
+    historicalVersionId: version.historicalVersionId ?? null,
+    versionType: version.versionType ?? "generated",
+    originalFilename: version.originalFilename ?? null,
+    importedRowCount: version.importedRowCount ?? null,
+  };
+}
 async function store() {
   const current = await readJson<Store>(STORE_PATH, emptyStore());
   current.sourceVersions = current.sourceVersions.map(normalizeSourceVersion);
+  current.finalVersions = current.finalVersions.map(normalizeFinalVersion);
+  current.selectedFinalBaselineVersionId ??= null;
   return current;
 }
 async function mutate<T>(fn: (current: Store) => Promise<T> | T): Promise<T> {
@@ -132,6 +149,17 @@ function snapshotPath(sourceVersionId: string) {
 }
 function finalPath(versionId: string) {
   return path.join(FINALS, `${versionId}.csv`);
+}
+function reviewContextKey(sourceVersionId: string, finalBaselineVersionId: string | null) {
+  return `${sourceVersionId}::${finalBaselineVersionId ?? "none"}`;
+}
+async function readFinalRows(versionId: string): Promise<SpecialCaseFinalRow[]> {
+  const parsed = parseCsvPreview(await fs.readFile(finalPath(versionId), "utf8"));
+  return parsed.rows.map((row) => ({
+    appId: text(row[0]),
+    cleanedPublisherName: text(row[1]),
+    revenueMultiplier: text(row[2]),
+  }));
 }
 function jobPath(jobId: string) {
   return path.join(JOBS, `${jobId}.json`);
@@ -459,19 +487,25 @@ export async function getSpecialCasesOverview(
   const active =
     (await getRemoteActiveArtifacts()).active.full?.artifact.id ?? null;
   const priorIds = new Set(prior?.rows.map((row) => row.appId) ?? []);
+  const selectedFinalBaseline = current.selectedFinalBaselineVersionId
+    ? await readFinalRows(current.selectedFinalBaselineVersionId)
+    : [];
   return {
     sourceVersions: current.sourceVersions,
     finalVersions: current.finalVersions,
     currentSourceVersionId: current.currentSourceVersionId,
     comparisonSourceVersionId: current.comparisonSourceVersionId,
+    selectedFinalBaselineVersionId: current.selectedFinalBaselineVersionId,
     activeFullArtifactId: active,
     publisherGroups: selected
       ? publisherGroups(selected.rows, current.publisherReviews, priorIds)
       : [],
     knownCleanedPublishers: [
       ...new Set(
-        selected?.rows.map((row) => row.cleanedPublisherName).filter(Boolean) ??
-          [],
+        [
+          ...(selected?.rows.map((row) => row.cleanedPublisherName) ?? []),
+          ...selectedFinalBaseline.map((row) => row.cleanedPublisherName),
+        ].filter(Boolean),
       ),
     ].sort(),
     canMutate,
@@ -574,6 +608,66 @@ export async function importSpecialCaseHistoricalBaseline(
     duplicateAppIdCount: parsed.duplicateAppIdCount,
   };
 }
+export async function importSpecialCaseHistoricalFinal(
+  input: { filename: string; bytes: Uint8Array },
+  actor: string,
+) {
+  const filename = text(input.filename);
+  if (!filename.toLowerCase().endsWith(".csv"))
+    throw new HistoricalFinalImportError("Choose a CSV file for the historical final version.");
+  if (!input.bytes.length)
+    throw new HistoricalFinalImportError("The historical final CSV is empty.");
+  if (input.bytes.length > HISTORICAL_BASELINE_MAX_BYTES)
+    throw new HistoricalFinalImportError("The historical final CSV exceeds the 25 MB limit.", 413);
+  let content: string;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(input.bytes);
+  } catch {
+    throw new HistoricalFinalImportError("The historical final CSV must be UTF-8 encoded.");
+  }
+  const parsed = parseHistoricalFinalCsv(content);
+  const canonicalCsv = buildFinalCsv(parsed.rows);
+  const checksum = sha256(canonicalCsv);
+  return mutate(async (current) => {
+    const existing = current.finalVersions.find(
+      (version) => version.versionType === "uploaded_history" && version.checksum === checksum,
+    );
+    if (existing) {
+      current.selectedFinalBaselineVersionId = existing.id;
+      return { version: existing, alreadyExisted: true, inputRowCount: parsed.inputRowCount };
+    }
+    const version: SpecialCaseFinalVersion = {
+      id: id("special_cases_final"),
+      label: `Historical Final Special Cases ${new Date().toLocaleString()}`,
+      createdAt: now(),
+      createdBy: actor,
+      rowCount: parsed.rows.length,
+      checksum,
+      sourceVersionId: null,
+      fullArtifactId: null,
+      historicalVersionId: null,
+      versionType: "uploaded_history",
+      originalFilename: filename,
+      importedRowCount: parsed.inputRowCount,
+    };
+    await dirs();
+    await fs.writeFile(finalPath(version.id), canonicalCsv, "utf8");
+    current.finalVersions.unshift(version);
+    current.selectedFinalBaselineVersionId = version.id;
+    return { version, alreadyExisted: false, inputRowCount: parsed.inputRowCount };
+  });
+}
+export async function setSelectedFinalBaselineVersion(finalVersionId: string | null) {
+  await mutate((current) => {
+    if (!finalVersionId) {
+      current.selectedFinalBaselineVersionId = null;
+      return;
+    }
+    if (!current.finalVersions.some((version) => version.id === finalVersionId))
+      throw new Error("Selected Historical Final Special Cases version was not found.");
+    current.selectedFinalBaselineVersionId = finalVersionId;
+  });
+}
 export async function createCumulativeSpecialCaseBaseline(
   baseBaselineSourceVersionId: string,
   appFullInfoSourceVersionId: string,
@@ -669,13 +763,17 @@ export async function savePublisherReviews(
 }
 export async function saveAppReviews(
   sourceVersionId: string,
+  finalBaselineVersionId: string | null,
   entries: Array<Omit<SpecialCaseAppReview, "updatedAt" | "updatedBy">>,
   actor: string,
 ) {
   await mutate((current) => {
     if (!current.sourceVersions.some((item) => item.id === sourceVersionId))
       throw new Error("Source version was not found.");
-    const target = (current.reviewsBySource[sourceVersionId] ??= {});
+    if (finalBaselineVersionId !== current.selectedFinalBaselineVersionId)
+      throw new Error("Historical Final Special Cases selection changed. Refresh Step 4 before saving.");
+    const contextKey = reviewContextKey(sourceVersionId, finalBaselineVersionId);
+    const target = (current.reviewsBySource[contextKey] ??= {});
     for (const entry of entries) {
       target[entry.appId] = {
         ...entry,
@@ -692,7 +790,7 @@ export async function saveAppReviews(
         updatedBy: actor,
       };
     }
-    current.reviewsBySource[sourceVersionId] = target;
+    current.reviewsBySource[contextKey] = target;
   });
 }
 export async function getInvestigationPage(query: {
@@ -709,11 +807,19 @@ export async function getInvestigationPage(query: {
   const prior = current.comparisonSourceVersionId
     ? await readSnapshot(current.comparisonSourceVersionId)
     : null;
-  let rows = investigationRows(
+  const finalBaseline = current.selectedFinalBaselineVersionId
+    ? await readFinalRows(current.selectedFinalBaselineVersionId)
+    : [];
+  const contextKey = reviewContextKey(
+    selected.id,
+    current.selectedFinalBaselineVersionId,
+  );
+  let rows = finalWorkingRows(
     selected.rows,
     new Set(prior?.rows.map((row) => row.appId) ?? []),
     current.publisherReviews,
-    current.reviewsBySource[selected.id] ?? {},
+    current.reviewsBySource[contextKey] ?? current.reviewsBySource[selected.id] ?? {},
+    finalBaseline,
   );
   const needle = text(query.search).toLowerCase();
   if (needle)
@@ -726,7 +832,7 @@ export async function getInvestigationPage(query: {
         row.publisherId,
       ].some((value) => value.toLowerCase().includes(needle)),
     );
-  if (query.newOnly) rows = rows.filter((row) => row.isNewApp);
+  if (query.newOnly) rows = rows.filter((row) => row.isNewSpecialCase);
   if (query.adjustmentsOnly) rows = rows.filter((row) => row.needReadjustment);
   if (query.incompleteOnly)
     rows = rows.filter(
@@ -749,10 +855,7 @@ export async function getInvestigationPage(query: {
     total,
   };
 }
-export async function createSpecialCaseFinalVersion(
-  historicalVersionId: string | null,
-  actor: string,
-) {
+export async function createSpecialCaseFinalVersion(actor: string) {
   const current = await store();
   if (!current.currentSourceVersionId)
     throw new Error(
@@ -770,36 +873,22 @@ export async function createSpecialCaseFinalVersion(
   const prior = current.comparisonSourceVersionId
     ? await readSnapshot(current.comparisonSourceVersionId)
     : null;
-  const examined = investigationRows(
+  const finalBaseline = current.selectedFinalBaselineVersionId
+    ? await readFinalRows(current.selectedFinalBaselineVersionId)
+    : [];
+  if (current.finalVersions.length && !current.selectedFinalBaselineVersionId)
+    throw new Error("Select a Historical Final Special Cases baseline before saving.");
+  const contextKey = reviewContextKey(source.id, current.selectedFinalBaselineVersionId);
+  const examined = finalWorkingRows(
     source.rows,
     new Set(prior?.rows.map((row) => row.appId) ?? []),
     current.publisherReviews,
-    current.reviewsBySource[source.id] ?? {},
+    current.reviewsBySource[contextKey] ?? current.reviewsBySource[source.id] ?? {},
+    finalBaseline,
   );
   const thisTime = adjustmentRows(examined);
   if (thisTime.errors.length) throw new Error(thisTime.errors.join(" "));
-  let history: SpecialCaseFinalRow[] = [];
-  if (historicalVersionId) {
-    if (!current.finalVersions.some((item) => item.id === historicalVersionId))
-      throw new Error("Selected historical final version was not found.");
-    const parsed = parseCsvPreview(
-      await fs.readFile(finalPath(historicalVersionId), "utf8"),
-    );
-    history = parsed.rows.map((row) => ({
-      appId: text(row[0]),
-      cleanedPublisherName: text(row[1]),
-      revenueMultiplier: text(row[2]),
-    }));
-  }
-  const historyIds = new Set(history.map((row) => row.appId));
-  const overlap = thisTime.rows.find((row) => historyIds.has(row.appId));
-  if (overlap)
-    throw new Error(
-      `App ${overlap.appId} is already in the selected historical version. Resolve the conflict before saving.`,
-    );
-  const rows = [...history, ...thisTime.rows].sort((a, b) =>
-    a.appId.localeCompare(b.appId),
-  );
+  const rows = thisTime.rows.sort((a, b) => a.appId.localeCompare(b.appId));
   const csv = buildFinalCsv(rows);
   const version: SpecialCaseFinalVersion = {
     id: id("special_cases_final"),
@@ -810,11 +899,15 @@ export async function createSpecialCaseFinalVersion(
     checksum: sha256(csv),
     sourceVersionId: source.id,
     fullArtifactId: source.fullArtifactId,
-    historicalVersionId,
+    historicalVersionId: current.selectedFinalBaselineVersionId,
+    versionType: "generated",
+    originalFilename: null,
+    importedRowCount: null,
   };
   await fs.writeFile(finalPath(version.id), csv, "utf8");
   await mutate((next) => {
     next.finalVersions.unshift(version);
+    next.selectedFinalBaselineVersionId = version.id;
   });
   return version;
 }

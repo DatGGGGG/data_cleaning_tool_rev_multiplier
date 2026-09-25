@@ -43,8 +43,57 @@ export function publisherGroups(rows: SpecialCaseSourceRow[], reviews: Record<st
 export function investigationRows(rows: SpecialCaseSourceRow[], priorAppIds: Set<string>, publisherReviews: Record<string, SpecialCasePublisherReview>, appReviews: Record<string, SpecialCaseAppReview>) : SpecialCaseInvestigationRow[] {
   return rows.filter((row) => publisherReviews[row.publisherName]?.isSuspected).map((row) => {
     const review = appReviews[row.appId];
-    return { ...row, isNewApp: !priorAppIds.has(row.appId), isSuspected: true, isChecked: Boolean(publisherReviews[row.publisherName]?.isChecked), needReadjustment: Boolean(review?.needReadjustment), adjustmentMode: review?.adjustmentMode ?? "", adjustedCleanedPublisherName: review?.adjustedCleanedPublisherName ?? "", adjustedRevenueMultiplier: review?.adjustedRevenueMultiplier ?? "", notes: review?.notes ?? "" };
+    return { ...row, isNewApp: !priorAppIds.has(row.appId), isNewSpecialCase: !priorAppIds.has(row.appId), isHistoricalFinal: false, historicalCleanedPublisherName: "", historicalRevenueMultiplier: "", isSuspected: true, isChecked: Boolean(publisherReviews[row.publisherName]?.isChecked), needReadjustment: Boolean(review?.needReadjustment), adjustmentMode: review?.adjustmentMode ?? "", adjustedCleanedPublisherName: review?.adjustedCleanedPublisherName ?? "", adjustedRevenueMultiplier: review?.adjustedRevenueMultiplier ?? "", notes: review?.notes ?? "" };
   });
+}
+
+export function finalWorkingRows(
+  currentRows: SpecialCaseSourceRow[],
+  priorAppIds: Set<string>,
+  publisherReviews: Record<string, SpecialCasePublisherReview>,
+  appReviews: Record<string, SpecialCaseAppReview>,
+  historicalFinalRows: SpecialCaseFinalRow[],
+): SpecialCaseInvestigationRow[] {
+  const historicalByAppId = new Map(historicalFinalRows.map((row) => [row.appId, row]));
+  const sourceByAppId = new Map(
+    currentRows
+      .filter((row) => publisherReviews[row.publisherName]?.isSuspected)
+      .map((row) => [row.appId, row]),
+  );
+  const appIds = new Set([...historicalByAppId.keys(), ...sourceByAppId.keys()]);
+  return [...appIds].map((appId) => {
+    const source = sourceByAppId.get(appId);
+    const historical = historicalByAppId.get(appId);
+    const review = appReviews[appId];
+    const isHistoricalFinal = Boolean(historical);
+    const includeInFinal = review ? review.needReadjustment : isHistoricalFinal;
+    const inheritedPublisher = historical?.cleanedPublisherName ?? "";
+    const inheritedMultiplier = historical?.revenueMultiplier ?? "";
+    const adjustmentMode = review?.adjustmentMode ?? (isHistoricalFinal ? (inheritedPublisher ? "set" : "clear") : "");
+    return {
+      ...(source ?? {
+        appId,
+        name: "",
+        url: "",
+        publisherId: "",
+        publisherName: "",
+        cleanedPublisherName: "",
+        revenueMultiplier: "",
+      }),
+      isNewApp: source ? !priorAppIds.has(appId) : false,
+      isNewSpecialCase: !isHistoricalFinal,
+      isHistoricalFinal,
+      historicalCleanedPublisherName: inheritedPublisher,
+      historicalRevenueMultiplier: inheritedMultiplier,
+      isSuspected: source ? true : false,
+      isChecked: source ? Boolean(publisherReviews[source.publisherName]?.isChecked) : true,
+      needReadjustment: includeInFinal,
+      adjustmentMode,
+      adjustedCleanedPublisherName: review?.adjustedCleanedPublisherName ?? inheritedPublisher,
+      adjustedRevenueMultiplier: review?.adjustedRevenueMultiplier ?? inheritedMultiplier,
+      notes: review?.notes ?? "",
+    };
+  }).sort((left, right) => left.appId.localeCompare(right.appId));
 }
 
 export function adjustmentRows(rows: SpecialCaseInvestigationRow[]) {

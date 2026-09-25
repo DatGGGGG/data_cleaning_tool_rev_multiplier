@@ -67,7 +67,6 @@ export function SpecialCasesWorkbench() {
   const [newOnly, setNewOnly] = useState(false);
   const [adjustmentsOnly, setAdjustmentsOnly] = useState(false);
   const [incompleteOnly, setIncompleteOnly] = useState(false);
-  const [historicalVersionId, setHistoricalVersionId] = useState("");
   const [publisherFilters, setPublisherFilters] = useState(blankFilters);
   const [publisherSortField, setPublisherSortField] =
     useState<SpecialCasePublisherSortField>("appCount");
@@ -83,11 +82,13 @@ export function SpecialCasesWorkbench() {
   const [message, setMessage] = useState("Loading Special Cases workspace…");
   const [busy, setBusy] = useState(false);
   const historicalBaselineInput = useRef<HTMLInputElement>(null);
+  const historicalFinalInput = useRef<HTMLInputElement>(null);
   const [selectedBaselineId, setSelectedBaselineId] = useState("");
   const [cumulativeBaseBaselineId, setCumulativeBaseBaselineId] = useState("");
   const [cumulativeAppSourceId, setCumulativeAppSourceId] = useState("");
   const currentId = overview?.currentSourceVersionId ?? "";
   const comparisonId = overview?.comparisonSourceVersionId ?? "";
+  const selectedFinalBaselineId = overview?.selectedFinalBaselineVersionId ?? "";
   const canMutate = Boolean(overview?.canMutate && !busy);
   const fullArtifacts = useMemo(
     () =>
@@ -250,6 +251,9 @@ export function SpecialCasesWorkbench() {
     );
   }, [currentId, page, search, newOnly, adjustmentsOnly, incompleteOnly]);
   useEffect(() => {
+    if (selectedFinalBaselineId) setNewOnly(true);
+  }, [selectedFinalBaselineId]);
+  useEffect(() => {
     if (!job || job.status === "success" || job.status === "failed") return;
     const timer = window.setTimeout(async () => {
       try {
@@ -397,6 +401,30 @@ export function SpecialCasesWorkbench() {
       );
     }
   }
+  async function uploadHistoricalFinal(file: File) {
+    setBusy(true);
+    setMessage(`Uploading ${file.name} as a Historical Final Special Cases baseline…`);
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      const result = await json<{
+        overview: SpecialCasesOverview;
+        importSummary: { filename: string; inputRowCount: number; alreadyExisted: boolean };
+      }>(await fetch(appApiPath("/api/special-cases/final-versions/import"), { method: "POST", body: formData }));
+      setOverview(result.overview);
+      setPage(1);
+      setNewOnly(true);
+      await loadRows();
+      setMessage(result.importSummary.alreadyExisted
+        ? `${result.importSummary.filename} was already imported and is selected as the historical final baseline.`
+        : `Imported ${result.importSummary.filename} with ${result.importSummary.inputRowCount.toLocaleString()} historical final rows.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not import the historical final CSV.");
+    } finally {
+      if (historicalFinalInput.current) historicalFinalInput.current.value = "";
+      setBusy(false);
+    }
+  }
   async function createCumulativeBaseline() {
     if (!cumulativeBaseBaselineId || !cumulativeAppSourceId) return;
     setBusy(true);
@@ -527,6 +555,7 @@ export function SpecialCasesWorkbench() {
       await action({
         action: "save_reviews",
         sourceVersionId: currentId,
+        finalVersionId: selectedFinalBaselineId || null,
         entries: rows.map((row) => ({
           appId: row.appId,
           needReadjustment: row.needReadjustment,
@@ -1213,8 +1242,8 @@ export function SpecialCasesWorkbench() {
               <div>
                 <h2>4. Investigate affected apps</h2>
                 <p>
-                  These columns match the App with VN Publishers worksheet. Only
-                  apps under suspected publisher names appear here.
+                  Review new suspected apps and the selected historical final
+                  entries in one editable working set.
                 </p>
               </div>
               <button
@@ -1225,6 +1254,47 @@ export function SpecialCasesWorkbench() {
               >
                 Save app reviews
               </button>
+            </div>
+            <div className="special-cases-controls">
+              <label className="settings-field">
+                <span>Historical Final Special Cases baseline</span>
+                <select
+                  value={selectedFinalBaselineId}
+                  disabled={!canMutate}
+                  onChange={(event) =>
+                    void action({
+                      action: "set_final_baseline",
+                      finalVersionId: event.target.value || null,
+                    })
+                  }
+                >
+                  <option value="">No historical final baseline</option>
+                  {overview?.finalVersions.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {version.label} · {version.rowCount.toLocaleString()} rows
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <input
+                ref={historicalFinalInput}
+                className="visually-hidden"
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void uploadHistoricalFinal(file);
+                }}
+              />
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={!canMutate}
+                onClick={() => historicalFinalInput.current?.click()}
+              >
+                Upload historical final CSV
+              </button>
+              {selectedFinalBaselineId ? <span className="active-version-label">Baseline selected</span> : null}
             </div>
             <div className="special-cases-filters">
               <input
@@ -1243,8 +1313,9 @@ export function SpecialCasesWorkbench() {
                     setNewOnly(event.target.checked);
                     setPage(1);
                   }}
+                  disabled={!selectedFinalBaselineId}
                 />{" "}
-                New apps only
+                New Special Cases only
               </label>
               <label>
                 <input
@@ -1280,9 +1351,10 @@ export function SpecialCasesWorkbench() {
                     <th>publisher_name</th>
                     <th>cleaned_publisher_name</th>
                     <th>revenue_multiplier</th>
-                    <th>Need Re-adjustment</th>
-                    <th>Adjusted cleaned_publisher_name</th>
-                    <th>Adjusted revenue_multiplier</th>
+                    <th>Historical final</th>
+                    <th>Include in final</th>
+                    <th>Final cleaned_publisher_name</th>
+                    <th>Final revenue_multiplier</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1290,8 +1362,10 @@ export function SpecialCasesWorkbench() {
                     <tr key={row.appId}>
                       <td>
                         {row.appId}
-                        {row.isNewApp ? (
-                          <span className="bootstrap-artifact-badge">New</span>
+                        {row.isNewSpecialCase ? (
+                          <span className="bootstrap-artifact-badge">New special case</span>
+                        ) : row.isHistoricalFinal ? (
+                          <span className="active-version-label">Historical</span>
                         ) : null}
                       </td>
                       <td>{row.name}</td>
@@ -1308,6 +1382,35 @@ export function SpecialCasesWorkbench() {
                       <td>{row.publisherName}</td>
                       <td>{row.cleanedPublisherName || "—"}</td>
                       <td>{row.revenueMultiplier}</td>
+                      <td>
+                        {row.isHistoricalFinal ? (
+                          <div className="special-cases-historical-final">
+                            <span>{`${row.historicalCleanedPublisherName || "blank"} · ${row.historicalRevenueMultiplier}`}</span>
+                            <button
+                              type="button"
+                              className="small-button"
+                              disabled={!canMutate}
+                              onClick={() =>
+                                updateRow(row.appId, {
+                                  needReadjustment: true,
+                                  adjustmentMode:
+                                    row.historicalCleanedPublisherName
+                                      ? "set"
+                                      : "clear",
+                                  adjustedCleanedPublisherName:
+                                    row.historicalCleanedPublisherName,
+                                  adjustedRevenueMultiplier:
+                                    row.historicalRevenueMultiplier,
+                                })
+                              }
+                            >
+                              Restore
+                            </button>
+                          </div>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td>
                         <input
                           type="checkbox"
@@ -1427,39 +1530,23 @@ export function SpecialCasesWorkbench() {
               <div>
                 <h2>5. Final Special Cases versions</h2>
                 <p>
-                  Save a staging-ready, immutable CSV. A historical overlap
-                  blocks saving rather than silently replacing an earlier
-                  adjustment.
+                  Save every included Step 4 row as a new immutable snapshot.
+                  Historical rows can be retained, changed, or removed.
                 </p>
               </div>
             </div>
             <div className="special-cases-controls">
-              <label className="settings-field">
-                <span>Previous Final Special Cases version (optional)</span>
-                <select
-                  value={historicalVersionId}
-                  onChange={(event) =>
-                    setHistoricalVersionId(event.target.value)
-                  }
-                  disabled={!canMutate}
-                >
-                  <option value="">No previous final version</option>
-                  {overview?.finalVersions.map((version) => (
-                    <option key={version.id} value={version.id}>
-                      {version.label} · {version.rowCount} rows
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <p className="muted-text">
+                {selectedFinalBaselineId
+                  ? `Using the selected historical final baseline. Edit or exclude its rows in Step 4 before saving.`
+                  : overview?.finalVersions.length
+                    ? "Select a Historical Final Special Cases baseline in Step 4 before saving."
+                    : "No historical final exists yet. This will create the first Final Special Cases snapshot."}
+              </p>
               <button
                 className="button button-primary"
-                disabled={!canMutate || !currentId}
-                onClick={() =>
-                  void action({
-                    action: "create_final",
-                    historicalVersionId: historicalVersionId || null,
-                  })
-                }
+                disabled={!canMutate || !currentId || Boolean(overview?.finalVersions.length && !selectedFinalBaselineId)}
+                onClick={() => void action({ action: "create_final" })}
               >
                 Save Final Special Cases
               </button>

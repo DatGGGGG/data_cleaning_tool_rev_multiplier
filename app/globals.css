@@ -495,6 +495,89 @@ textarea {
   min-width: 260px;
 }
 
+.special-cases-review-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin: 14px 0 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, #dbe3ed);
+  color: var(--muted, #64748b);
+  font-size: 0.9rem;
+}
+
+.special-cases-review-summary strong {
+  color: var(--text, #172b4d);
+}
+
+.special-cases-publisher-toolbar,
+.special-cases-quick-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  align-items: center;
+}
+
+.special-cases-publisher-toolbar {
+  margin: 12px 0 8px;
+}
+
+.special-cases-publisher-toolbar input {
+  flex: 1 1 320px;
+  min-width: min(320px, 100%);
+}
+
+.special-cases-publisher-toolbar select {
+  min-width: 150px;
+}
+
+.special-cases-quick-filters {
+  margin-bottom: 12px;
+}
+
+.special-cases-publisher-table {
+  min-width: 1100px;
+}
+
+.special-cases-sort-button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 0;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.special-cases-sort-button:hover {
+  color: #174f83;
+  text-decoration: underline;
+}
+
+.special-cases-sort-indicator {
+  color: #195d9a;
+}
+
+.special-cases-publisher-row-suspected td {
+  background: #fffaf0;
+}
+
+.special-cases-publisher-row-unchecked td {
+  background: #fff4f3;
+}
+
+.special-cases-page-size {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.special-cases-page-size select {
+  min-width: 72px;
+}
+
 .special-cases-version-list {
   display: grid;
   gap: 10px;

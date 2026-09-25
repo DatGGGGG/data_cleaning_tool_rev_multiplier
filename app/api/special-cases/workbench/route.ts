@@ -1,7 +1,98 @@
 import { NextResponse } from "next/server";
 import { requireMappingArtifactCapability } from "@/lib/mapping-artifacts/auth";
-import { createCumulativeSpecialCaseBaseline, createSpecialCaseFinalVersion, getSpecialCasesOverview, saveAppReviews, savePublisherReviews, setComparisonSourceVersion } from "@/lib/special-cases/server";
+import {
+  createCumulativeSpecialCaseBaseline,
+  createSpecialCaseFinalVersion,
+  getSpecialCasesOverview,
+  saveAppReviews,
+  savePublisherReviews,
+  setComparisonSourceVersion,
+} from "@/lib/special-cases/server";
 
-function failure(error: unknown) { return NextResponse.json({ error: { message: error instanceof Error ? error.message : "Special Cases request failed." } }, { status: (error as { status?: number })?.status ?? 500 }); }
-export async function GET(request: Request) { try { const principal=await requireMappingArtifactCapability(request,"read"); return NextResponse.json({ overview:await getSpecialCasesOverview(principal.portalRole!=="viewer") },{headers:{"Cache-Control":"no-store"}}); } catch(error) { return failure(error); } }
-export async function POST(request: Request) { try { const principal=await requireMappingArtifactCapability(request,"commit"); const body=await request.json() as {action?:string;sourceVersionId?:string|null;baseBaselineSourceVersionId?:string;entries?:never[];historicalVersionId?:string|null}; if(body.action==="set_comparison") await setComparisonSourceVersion(body.sourceVersionId??null); else if(body.action==="create_cumulative_baseline") { if(!body.baseBaselineSourceVersionId) throw new Error("Select a baseline before creating a cumulative baseline."); const result=await createCumulativeSpecialCaseBaseline(body.baseBaselineSourceVersionId,principal.displayName); return NextResponse.json({result,overview:await getSpecialCasesOverview(true)},{headers:{"Cache-Control":"no-store"}}); } else if(body.action==="save_publishers") await savePublisherReviews((body.entries??[]) as Parameters<typeof savePublisherReviews>[0],principal.displayName); else if(body.action==="save_reviews") { if(!body.sourceVersionId) throw new Error("A source version is required."); await saveAppReviews(body.sourceVersionId,(body.entries??[]) as Parameters<typeof saveAppReviews>[1],principal.displayName); } else if(body.action==="create_final") { const version=await createSpecialCaseFinalVersion(body.historicalVersionId??null,principal.displayName); return NextResponse.json({version}); } else throw new Error("Unsupported Special Cases action."); return NextResponse.json({overview:await getSpecialCasesOverview(true)},{headers:{"Cache-Control":"no-store"}}); } catch(error) { return failure(error); } }
+function failure(error: unknown) {
+  return NextResponse.json(
+    {
+      error: {
+        message:
+          error instanceof Error
+            ? error.message
+            : "Special Cases request failed.",
+      },
+    },
+    { status: (error as { status?: number })?.status ?? 500 },
+  );
+}
+export async function GET(request: Request) {
+  try {
+    const principal = await requireMappingArtifactCapability(request, "read");
+    return NextResponse.json(
+      {
+        overview: await getSpecialCasesOverview(
+          principal.portalRole !== "viewer",
+        ),
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  } catch (error) {
+    return failure(error);
+  }
+}
+export async function POST(request: Request) {
+  try {
+    const principal = await requireMappingArtifactCapability(request, "commit");
+    const body = (await request.json()) as {
+      action?: string;
+      sourceVersionId?: string | null;
+      baseBaselineSourceVersionId?: string;
+      appFullInfoSourceVersionId?: string;
+      entries?: never[];
+      historicalVersionId?: string | null;
+    };
+    if (body.action === "set_comparison")
+      await setComparisonSourceVersion(body.sourceVersionId ?? null);
+    else if (body.action === "create_cumulative_baseline") {
+      if (!body.baseBaselineSourceVersionId)
+        throw new Error(
+          "Select a baseline before creating a cumulative baseline.",
+        );
+      if (!body.appFullInfoSourceVersionId)
+        throw new Error(
+          "Select an App Full Info source before creating a cumulative baseline.",
+        );
+      const result = await createCumulativeSpecialCaseBaseline(
+        body.baseBaselineSourceVersionId,
+        body.appFullInfoSourceVersionId,
+        principal.displayName,
+      );
+      return NextResponse.json(
+        { result, overview: await getSpecialCasesOverview(true) },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    } else if (body.action === "save_publishers")
+      await savePublisherReviews(
+        (body.entries ?? []) as Parameters<typeof savePublisherReviews>[0],
+        principal.displayName,
+      );
+    else if (body.action === "save_reviews") {
+      if (!body.sourceVersionId)
+        throw new Error("A source version is required.");
+      await saveAppReviews(
+        body.sourceVersionId,
+        (body.entries ?? []) as Parameters<typeof saveAppReviews>[1],
+        principal.displayName,
+      );
+    } else if (body.action === "create_final") {
+      const version = await createSpecialCaseFinalVersion(
+        body.historicalVersionId ?? null,
+        principal.displayName,
+      );
+      return NextResponse.json({ version });
+    } else throw new Error("Unsupported Special Cases action.");
+    return NextResponse.json(
+      { overview: await getSpecialCasesOverview(true) },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  } catch (error) {
+    return failure(error);
+  }
+}

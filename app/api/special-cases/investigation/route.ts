@@ -1,0 +1,4 @@
+import { NextResponse } from "next/server";
+import { requireMappingArtifactCapability } from "@/lib/mapping-artifacts/auth";
+import { getInvestigationPage } from "@/lib/special-cases/server";
+export async function GET(request:Request) { try { await requireMappingArtifactCapability(request,"read");const q=new URL(request.url).searchParams;return NextResponse.json(await getInvestigationPage({page:Number(q.get("page"))||1,pageSize:Number(q.get("pageSize"))||25,search:q.get("search")??"",newOnly:q.get("newOnly")==="true",adjustmentsOnly:q.get("adjustmentsOnly")==="true",incompleteOnly:q.get("incompleteOnly")==="true"}),{headers:{"Cache-Control":"no-store"}}); } catch(error) { return NextResponse.json({error:{message:error instanceof Error?error.message:"Could not load investigation rows."}},{status:(error as {status?:number})?.status??500}); } }

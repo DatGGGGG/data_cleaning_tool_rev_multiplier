@@ -471,6 +471,77 @@ textarea {
   background: #25824c;
 }
 
+.special-cases-controls,
+.special-cases-filters,
+.pagination-controls {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.special-cases-controls .settings-field {
+  min-width: min(620px, 100%);
+  flex: 1 1 420px;
+}
+
+.special-cases-filters {
+  align-items: center;
+  margin: 14px 0;
+}
+
+.special-cases-filters input[type="text"],
+.special-cases-filters input:not([type]) {
+  min-width: 260px;
+}
+
+.special-cases-version-list {
+  display: grid;
+  gap: 10px;
+}
+
+.special-cases-version {
+  border: 1px solid var(--border, #dbe3ed);
+  border-radius: 6px;
+  padding: 13px;
+}
+
+.special-cases-version.selected {
+  border-color: #2d66a0;
+  box-shadow: inset 3px 0 #2d66a0;
+}
+
+.special-cases-version p {
+  margin: 5px 0;
+}
+
+.special-cases-table {
+  min-width: 1750px;
+}
+
+.special-cases-table th,
+.special-cases-table td {
+  vertical-align: top;
+}
+
+.special-cases-table select,
+.special-cases-table input[type="number"] {
+  min-width: 150px;
+  width: 100%;
+}
+
+.special-cases-adjustment {
+  display: grid;
+  gap: 6px;
+  min-width: 190px;
+}
+
+.pagination-controls {
+  justify-content: end;
+  align-items: center;
+  margin-top: 12px;
+}
+
 .enrichment-progress-failed,
 .enrichment-progress-interrupted {
   background: #f4d4d4;

@@ -42,6 +42,9 @@ export default async function RootLayout({
               <Link href="/full-mapping" className="topbar-link">
                 Full Mapping
               </Link>
+              <Link href="/special-cases" className="topbar-link">
+                Special Cases
+              </Link>
               <Link href="/artifact-registry" className="topbar-link">
                 Artifact Registry
               </Link>

@@ -13,11 +13,15 @@ export type SpecialCaseSourceVersion = {
   label: string;
   createdAt: string;
   createdBy: string;
-  fullArtifactId: string;
-  fullArtifactChecksum: string;
+  /** Null only for a user-uploaded historical comparison baseline. */
+  fullArtifactId: string | null;
+  fullArtifactChecksum: string | null;
   rowCount: number;
   checksum: string;
-  sourceType: "api" | "file";
+  sourceType: "api" | "file" | "uploaded_baseline";
+  originalFilename: string | null;
+  importedRowCount: number | null;
+  duplicateAppIdCount: number | null;
 };
 
 export type SpecialCasePublisherReview = {

@@ -8,7 +8,7 @@ import { downloadRemoteArtifact, getRemoteActiveArtifacts, getRemoteArtifact } f
 import type { MappingArtifact } from "@/lib/mapping-artifacts/types";
 import type { SpecialCaseAppReview, SpecialCaseFinalRow, SpecialCaseFinalVersion, SpecialCaseJob, SpecialCasePublisherReview, SpecialCaseSourceRow, SpecialCaseSourceVersion, SpecialCasesOverview } from "@/lib/special-cases/types";
 import { HISTORICAL_BASELINE_MAX_BYTES, HistoricalBaselineImportError, parseHistoricalBaselineCsv } from "@/lib/special-cases/source-import";
-import { adjustmentRows, buildFinalCsv, buildSourceCsv, investigationRows, publisherGroups, sha256, text } from "@/lib/special-cases/workbench";
+import { adjustmentRows, buildFinalCsv, buildSourceCsv, cumulativeBaselineRows, investigationRows, publisherGroups, sha256, text } from "@/lib/special-cases/workbench";
 
 const ROOT = path.join(process.cwd(), "storage", "special-cases");
 const STORE_PATH = path.join(ROOT, "workbench.json");
@@ -35,6 +35,12 @@ function normalizeSourceVersion(source: SpecialCaseSourceVersion): SpecialCaseSo
     originalFilename: source.originalFilename ?? null,
     importedRowCount: source.importedRowCount ?? null,
     duplicateAppIdCount: source.duplicateAppIdCount ?? null,
+    baseBaselineSourceVersionId: source.baseBaselineSourceVersionId ?? null,
+    mergedCurrentSourceVersionId: source.mergedCurrentSourceVersionId ?? null,
+    baseBaselineChecksum: source.baseBaselineChecksum ?? null,
+    mergedCurrentSourceChecksum: source.mergedCurrentSourceChecksum ?? null,
+    addedAppCount: source.addedAppCount ?? null,
+    overlappingAppCount: source.overlappingAppCount ?? null,
   };
 }
 async function store() { const current=await readJson<Store>(STORE_PATH,emptyStore()); current.sourceVersions=current.sourceVersions.map(normalizeSourceVersion); return current; }
@@ -88,12 +94,13 @@ export async function startSpecialCaseSourceJob(fullArtifactId: string, actor: s
 async function runSourceJob(job:SpecialCaseJob, artifact:MappingArtifact, actor:string) {
   try { job.status="running";job.stage="Downloading Full Mapping";job.startedAt=now();await writeJob(job); const downloaded=await downloadRemoteArtifact(artifact.id); const csv=Buffer.from(downloaded.body).toString("utf8"); if(sha256(csv)!==artifact.checksum_sha256) throw new Error("Downloaded Full Mapping checksum did not match artifact metadata."); const mapping=fullIndex(csv); job.stage="Loading App Full Info"; job.message="Joining current apps to the selected committed Full Mapping."; await writeJob(job);
     const loaded=await loadCurrentApps(mapping,async(scanned,matched,pages)=>{job.scannedRecords=scanned;job.matchedRecords=matched;job.pagesRead=pages;job.message=`Scanned ${scanned.toLocaleString()} apps; matched ${matched.toLocaleString()} apps.`;await writeJob(job);});
-    const distinct=[...new Map(loaded.rows.map(row=>[row.appId,row])).values()].sort((a,b)=>a.appId.localeCompare(b.appId)); const csvContent=buildSourceCsv(distinct); const source:Snapshot={id:id("special_cases_source_version"),label:`Current App Full Info ${new Date().toLocaleString()}`,createdAt:now(),createdBy:actor,fullArtifactId:artifact.id,fullArtifactChecksum:artifact.checksum_sha256,rowCount:distinct.length,checksum:sha256(csvContent),sourceType:loaded.sourceType,originalFilename:null,importedRowCount:null,duplicateAppIdCount:null,rows:distinct}; await atomic(snapshotPath(source.id),source); await mutate(current=>{ const previousCurrent=current.currentSourceVersionId ? current.sourceVersions.find(item=>item.id===current.currentSourceVersionId) ?? null : null; const { rows: _rows, ...metadata }=source; current.sourceVersions.unshift(metadata);current.currentSourceVersionId=source.id;if(previousCurrent && previousCurrent.sourceType!=="uploaded_baseline") current.comparisonSourceVersionId=previousCurrent.id;current.reviewsBySource[source.id]={};}); job.status="success";job.stage="Complete";job.message=`Saved ${distinct.length.toLocaleString()} apps in an immutable source version.`;job.scannedRecords=loaded.scanned;job.matchedRecords=distinct.length;job.resultSourceVersionId=source.id;job.finishedAt=now();await writeJob(job);
+    const distinct=[...new Map(loaded.rows.map(row=>[row.appId,row])).values()].sort((a,b)=>a.appId.localeCompare(b.appId)); const csvContent=buildSourceCsv(distinct); const source:Snapshot={id:id("special_cases_source_version"),label:`Current App Full Info ${new Date().toLocaleString()}`,createdAt:now(),createdBy:actor,fullArtifactId:artifact.id,fullArtifactChecksum:artifact.checksum_sha256,rowCount:distinct.length,checksum:sha256(csvContent),sourceType:loaded.sourceType,originalFilename:null,importedRowCount:null,duplicateAppIdCount:null,baseBaselineSourceVersionId:null,mergedCurrentSourceVersionId:null,baseBaselineChecksum:null,mergedCurrentSourceChecksum:null,addedAppCount:null,overlappingAppCount:null,rows:distinct}; await atomic(snapshotPath(source.id),source); await mutate(current=>{ const { rows: _rows, ...metadata }=source; current.sourceVersions.unshift(metadata);current.currentSourceVersionId=source.id;current.reviewsBySource[source.id]={};}); job.status="success";job.stage="Complete";job.message=`Saved ${distinct.length.toLocaleString()} apps in an immutable source version.`;job.scannedRecords=loaded.scanned;job.matchedRecords=distinct.length;job.resultSourceVersionId=source.id;job.finishedAt=now();await writeJob(job);
   } catch(error) { job.status="failed";job.stage="Failed";job.error=error instanceof Error?error.message:"Could not load Special Cases source.";job.message=job.error;job.finishedAt=now();await writeJob(job); }
 }
 
 export async function getSpecialCasesOverview(canMutate:boolean):Promise<SpecialCasesOverview> { const current=await store(); const selected=current.currentSourceVersionId?await readSnapshot(current.currentSourceVersionId):null; const prior=current.comparisonSourceVersionId?await readSnapshot(current.comparisonSourceVersionId):null; const active=(await getRemoteActiveArtifacts()).active.full?.artifact.id ?? null; const priorIds=new Set(prior?.rows.map(row=>row.appId)??[]); return {sourceVersions:current.sourceVersions,finalVersions:current.finalVersions,currentSourceVersionId:current.currentSourceVersionId,comparisonSourceVersionId:current.comparisonSourceVersionId,activeFullArtifactId:active,publisherGroups:selected?publisherGroups(selected.rows,current.publisherReviews,priorIds):[],knownCleanedPublishers:[...new Set(selected?.rows.map(row=>row.cleanedPublisherName).filter(Boolean)??[])].sort(),canMutate}; }
-export async function setComparisonSourceVersion(sourceVersionId:string|null) { await mutate(current=>{ if(sourceVersionId && !current.sourceVersions.some(item=>item.id===sourceVersionId)) throw new Error("Selected comparison source version was not found."); current.comparisonSourceVersionId=sourceVersionId; }); }
+export function isComparisonBaseline(source: SpecialCaseSourceVersion) { return source.sourceType === "uploaded_baseline" || source.sourceType === "cumulative_baseline"; }
+export async function setComparisonSourceVersion(sourceVersionId:string|null) { await mutate(current=>{ if(!sourceVersionId) { current.comparisonSourceVersionId=null; return; } const source=current.sourceVersions.find(item=>item.id===sourceVersionId); if(!source) throw new Error("Selected comparison baseline was not found."); if(!isComparisonBaseline(source)) throw new Error("Only historical or cumulative baseline versions can be used for comparison."); current.comparisonSourceVersionId=source.id; }); }
 export async function importSpecialCaseHistoricalBaseline(input:{filename:string;mimeType:string;bytes:Uint8Array}, actor:string) {
   const filename=text(input.filename);
   if (!filename.toLowerCase().endsWith(".csv")) throw new HistoricalBaselineImportError("Choose a CSV file for the historical baseline.");
@@ -107,7 +114,7 @@ export async function importSpecialCaseHistoricalBaseline(input:{filename:string
   const result=await mutate(async current=>{
     const existing=current.sourceVersions.find(item=>item.sourceType==="uploaded_baseline" && item.checksum===checksum);
     if(existing) { current.comparisonSourceVersionId=existing.id; return { sourceVersion:existing, alreadyExisted:true }; }
-    const source:Snapshot={id:id("special_cases_source_version"),label:`Historical baseline ${new Date().toLocaleString()}`,createdAt:now(),createdBy:actor,fullArtifactId:null,fullArtifactChecksum:null,rowCount:parsed.uniqueAppCount,checksum,sourceType:"uploaded_baseline",originalFilename:filename,importedRowCount:parsed.inputRowCount,duplicateAppIdCount:parsed.duplicateAppIdCount,rows:parsed.rows};
+    const source:Snapshot={id:id("special_cases_source_version"),label:`Historical baseline ${new Date().toLocaleString()}`,createdAt:now(),createdBy:actor,fullArtifactId:null,fullArtifactChecksum:null,rowCount:parsed.uniqueAppCount,checksum,sourceType:"uploaded_baseline",originalFilename:filename,importedRowCount:parsed.inputRowCount,duplicateAppIdCount:parsed.duplicateAppIdCount,baseBaselineSourceVersionId:null,mergedCurrentSourceVersionId:null,baseBaselineChecksum:null,mergedCurrentSourceChecksum:null,addedAppCount:null,overlappingAppCount:null,rows:parsed.rows};
     await atomic(snapshotPath(source.id),source);
     const { rows: _rows, ...metadata }=source;
     current.sourceVersions.unshift(metadata);
@@ -115,6 +122,23 @@ export async function importSpecialCaseHistoricalBaseline(input:{filename:string
     return { sourceVersion:metadata, alreadyExisted:false };
   });
   return { ...result, inputRowCount:parsed.inputRowCount, uniqueAppCount:parsed.uniqueAppCount, duplicateAppIdCount:parsed.duplicateAppIdCount };
+}
+export async function createCumulativeSpecialCaseBaseline(baseBaselineSourceVersionId:string, actor:string) {
+  return mutate(async current=>{
+    if(!current.currentSourceVersionId) throw new Error("Load current App Full Info before creating a cumulative baseline.");
+    const baselineMetadata=current.sourceVersions.find(item=>item.id===baseBaselineSourceVersionId);
+    if(!baselineMetadata) throw new Error("Selected baseline was not found.");
+    if(!isComparisonBaseline(baselineMetadata)) throw new Error("Choose a historical or cumulative baseline.");
+    const currentMetadata=current.sourceVersions.find(item=>item.id===current.currentSourceVersionId);
+    if(!currentMetadata || isComparisonBaseline(currentMetadata)) throw new Error("The current source must be a production App Full Info version.");
+    const baseline=await readSnapshot(baselineMetadata.id); const currentSource=await readSnapshot(currentMetadata.id);
+    if(!currentSource.fullArtifactId || !currentSource.fullArtifactChecksum) throw new Error("The current source is missing Full Mapping lineage.");
+    const {rows,addedAppCount,overlappingAppCount}=cumulativeBaselineRows(baseline.rows,currentSource.rows); const csv=buildSourceCsv(rows); const checksum=sha256(csv);
+    const existing=current.sourceVersions.find(item=>item.sourceType==="cumulative_baseline"&&item.checksum===checksum&&item.baseBaselineSourceVersionId===baseline.id&&item.mergedCurrentSourceVersionId===currentSource.id);
+    if(existing) return {sourceVersion:existing,alreadyExisted:true};
+    const source:Snapshot={id:id("special_cases_source_version"),label:`Cumulative baseline ${new Date().toLocaleString()}`,createdAt:now(),createdBy:actor,fullArtifactId:currentSource.fullArtifactId,fullArtifactChecksum:currentSource.fullArtifactChecksum,rowCount:rows.length,checksum,sourceType:"cumulative_baseline",originalFilename:null,importedRowCount:null,duplicateAppIdCount:null,baseBaselineSourceVersionId:baseline.id,mergedCurrentSourceVersionId:currentSource.id,baseBaselineChecksum:baseline.checksum,mergedCurrentSourceChecksum:currentSource.checksum,addedAppCount,overlappingAppCount,rows};
+    await atomic(snapshotPath(source.id),source); const {rows:_rows,...metadata}=source; current.sourceVersions.unshift(metadata); return {sourceVersion:metadata,alreadyExisted:false};
+  });
 }
 export async function savePublisherReviews(entries: Array<Pick<SpecialCasePublisherReview,"publisherName"|"isSuspected"|"isChecked"|"notes">>, actor:string) { await mutate(current=>{for(const entry of entries){const name=text(entry.publisherName);if(name) current.publisherReviews[name]={publisherName:name,isSuspected:Boolean(entry.isSuspected),isChecked:Boolean(entry.isChecked),notes:text(entry.notes),updatedAt:now(),updatedBy:actor};}}); }
 export async function saveAppReviews(sourceVersionId:string, entries: Array<Omit<SpecialCaseAppReview,"updatedAt"|"updatedBy">>, actor:string) { await mutate(current=>{if(!current.sourceVersions.some(item=>item.id===sourceVersionId)) throw new Error("Source version was not found."); const target=current.reviewsBySource[sourceVersionId]??={};for(const entry of entries){target[entry.appId]={...entry,appId:text(entry.appId),needReadjustment:Boolean(entry.needReadjustment),adjustmentMode:entry.adjustmentMode==="clear"||entry.adjustmentMode==="set"?entry.adjustmentMode:"",adjustedCleanedPublisherName:text(entry.adjustedCleanedPublisherName),adjustedRevenueMultiplier:text(entry.adjustedRevenueMultiplier),notes:text(entry.notes),updatedAt:now(),updatedBy:actor};}current.reviewsBySource[sourceVersionId]=target;}); }

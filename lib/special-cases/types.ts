@@ -18,10 +18,16 @@ export type SpecialCaseSourceVersion = {
   fullArtifactChecksum: string | null;
   rowCount: number;
   checksum: string;
-  sourceType: "api" | "file" | "uploaded_baseline";
+  sourceType: "api" | "file" | "uploaded_baseline" | "cumulative_baseline";
   originalFilename: string | null;
   importedRowCount: number | null;
   duplicateAppIdCount: number | null;
+  baseBaselineSourceVersionId: string | null;
+  mergedCurrentSourceVersionId: string | null;
+  baseBaselineChecksum: string | null;
+  mergedCurrentSourceChecksum: string | null;
+  addedAppCount: number | null;
+  overlappingAppCount: number | null;
 };
 
 export type SpecialCasePublisherReview = {

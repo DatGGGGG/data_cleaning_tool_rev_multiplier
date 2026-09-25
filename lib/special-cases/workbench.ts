@@ -13,6 +13,20 @@ export function buildFinalCsv(rows: SpecialCaseFinalRow[]) {
   return ["app_id,cleaned_publisher_name,revenue_multiplier", ...rows.map((row) => [row.appId,row.cleanedPublisherName,row.revenueMultiplier].map(csvCell).join(","))].join("\n") + "\n";
 }
 
+export function cumulativeBaselineRows(baselineRows: SpecialCaseSourceRow[], currentRows: SpecialCaseSourceRow[]) {
+  const baselineIds = new Set(baselineRows.map((row) => text(row.appId)));
+  const currentIds = new Set(currentRows.map((row) => text(row.appId)));
+  const rowsByAppId = new Map<string, SpecialCaseSourceRow>();
+  for (const row of baselineRows) rowsByAppId.set(text(row.appId), row);
+  // Current production metadata wins for an app present in both sources.
+  for (const row of currentRows) rowsByAppId.set(text(row.appId), row);
+  return {
+    rows: [...rowsByAppId.values()].sort((left, right) => left.appId.localeCompare(right.appId)),
+    addedAppCount: [...currentIds].filter((appId) => !baselineIds.has(appId)).length,
+    overlappingAppCount: [...currentIds].filter((appId) => baselineIds.has(appId)).length,
+  };
+}
+
 export function publisherGroups(rows: SpecialCaseSourceRow[], reviews: Record<string, SpecialCasePublisherReview>, priorAppIds: Set<string>) {
   const values = new Map<string, SpecialCasePublisherGroup>();
   for (const row of rows) {

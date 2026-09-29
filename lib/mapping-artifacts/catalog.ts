@@ -6,7 +6,7 @@ import type {
   MappingArtifactType,
 } from "@/lib/mapping-artifacts/types";
 
-export const MAPPING_ARTIFACT_TYPES = ["top_down_raw", "top_down_with_publisher_ids", "bottom_up", "full"] as const;
+export const MAPPING_ARTIFACT_TYPES = ["top_down_raw", "top_down_with_publisher_ids", "bottom_up", "full", "special_cases"] as const;
 
 export type CatalogArtifactType = (typeof MAPPING_ARTIFACT_TYPES)[number];
 
@@ -41,6 +41,7 @@ export function artifactTypeLabel(type: MappingArtifactType) {
   if (type === "top_down_raw") return "Raw Top Down";
   if (type === "top_down_with_publisher_ids") return "Apps + Publisher IDs";
   if (type === "bottom_up") return "Bottom Up";
+  if (type === "special_cases") return "Special Cases";
   return "Full Mapping";
 }
 
@@ -90,7 +91,7 @@ export function publishedSavedVersion(
     && item.remoteArtifactType === expectedType
     && item.remoteStatus === "committed"
   ));
-  return receipt ? {
+  return receipt?.remoteStatus === "committed" ? {
     artifactId: receipt.remoteArtifactId,
     status: receipt.remoteStatus,
     publishedAt: receipt.publishedAt,
@@ -131,11 +132,29 @@ export function artifactCounts(artifacts: MappingArtifact[]) {
   return counts;
 }
 
+export function activeArtifactEntry(
+  active: MappingArtifactActiveState | null,
+  type: "full" | "special_cases",
+) {
+  return active?.[type] ?? null;
+}
+
 export function activeFullEntry(active: MappingArtifactActiveState | null) {
-  return active?.full ?? null;
+  return activeArtifactEntry(active, "full");
+}
+
+export function activeSpecialCasesEntry(active: MappingArtifactActiveState | null) {
+  return activeArtifactEntry(active, "special_cases");
 }
 
 export function isActiveFullArtifact(artifactId: string, active: MappingArtifactActiveEntry | null) {
+  return active?.artifact.id === artifactId;
+}
+
+export function isActiveSpecialCasesArtifact(
+  artifactId: string,
+  active: MappingArtifactActiveEntry | null,
+) {
   return active?.artifact.id === artifactId;
 }
 

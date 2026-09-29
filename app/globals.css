@@ -686,6 +686,44 @@ textarea {
   margin: 5px 0;
 }
 
+.special-cases-version.special-cases-version-active {
+  border-color: #3d8c5a;
+  box-shadow: inset 3px 0 #3d8c5a;
+}
+
+.special-cases-version-heading,
+.special-cases-artifact-actions,
+.special-cases-active-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.special-cases-artifact-state {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border, #dbe3ed);
+}
+
+.special-cases-active-artifact {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #b9d8c1;
+  border-radius: 6px;
+  background: #f5fbf6;
+}
+
+.special-cases-activation-history {
+  margin-top: 14px;
+}
+
+.warning-text {
+  color: #875b0a;
+}
+
 .special-cases-table {
   min-width: 1750px;
 }

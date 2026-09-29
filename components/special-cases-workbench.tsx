@@ -2,7 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { appApiPath } from "@/lib/app-path";
-import type { MappingArtifact } from "@/lib/mapping-artifacts/types";
+import {
+  activeSpecialCasesArtifact,
+  findArtifactForSpecialCasesVersion,
+  isActiveSpecialCasesArtifact,
+  specialCasesActivationConfirmationMessage,
+  specialCasesActivationDisabledReason,
+  specialCasesCommitDisabledReason,
+  specialCasesPublishDisabledReason,
+} from "@/lib/mapping-artifacts/special-cases-artifacts";
+import type {
+  MappingArtifact,
+  MappingArtifactActivationHistoryResponse,
+  MappingArtifactActivationResponse,
+  MappingArtifactActiveResponse,
+  MappingArtifactActiveState,
+  MappingArtifactReadiness,
+} from "@/lib/mapping-artifacts/types";
 import {
   filterSpecialCasePublisherGroups,
   sortSpecialCasePublisherGroups,
@@ -19,7 +35,8 @@ import type {
 
 const short = (value: string | null | undefined) =>
   value ? (value.length > 12 ? `${value.slice(0, 12)}…` : value) : "—";
-const date = (value: string) => new Date(value).toLocaleString();
+const date = (value: string | null | undefined) =>
+  value ? new Date(value).toLocaleString() : "—";
 const isComparisonBaseline = (sourceType: string) =>
   sourceType === "uploaded_baseline" || sourceType === "cumulative_baseline";
 const isAppFullInfoSource = (sourceType: string) =>
@@ -58,6 +75,12 @@ const sectionLinks = [
 export function SpecialCasesWorkbench() {
   const [overview, setOverview] = useState<SpecialCasesOverview | null>(null);
   const [artifacts, setArtifacts] = useState<MappingArtifact[]>([]);
+  const [readiness, setReadiness] = useState<MappingArtifactReadiness | null>(null);
+  const [activeArtifactState, setActiveArtifactState] = useState<MappingArtifactActiveState | null>(null);
+  const [activationHistory, setActivationHistory] = useState<MappingArtifactActivationHistoryResponse["events"]>([]);
+  const [publishingVersionId, setPublishingVersionId] = useState<string | null>(null);
+  const [committingArtifactId, setCommittingArtifactId] = useState<string | null>(null);
+  const [activatingArtifactId, setActivatingArtifactId] = useState<string | null>(null);
   const [fullArtifactId, setFullArtifactId] = useState("");
   const [job, setJob] = useState<SpecialCaseJob | null>(null);
   const [rows, setRows] = useState<SpecialCaseInvestigationRow[]>([]);
@@ -150,6 +173,11 @@ export function SpecialCasesWorkbench() {
   );
   const suspectedCount = groups.filter((group) => group.isSuspected).length;
   const checkedCount = groups.filter((group) => group.isChecked).length;
+  const specialCasesArtifacts = useMemo(
+    () => artifacts.filter((item) => item.artifact_type === "special_cases"),
+    [artifacts],
+  );
+  const activeSpecialCases = activeSpecialCasesArtifact(activeArtifactState);
 
   async function json<T>(response: Response): Promise<T> {
     const body = await response.json().catch(() => ({}));
@@ -157,7 +185,7 @@ export function SpecialCasesWorkbench() {
     return body as T;
   }
   async function refresh() {
-    const [workbench, catalog] = await Promise.all([
+    const [workbench, catalog, nextReadiness, active, history] = await Promise.all([
       json<{ overview: SpecialCasesOverview }>(
         await fetch(appApiPath("/api/special-cases/workbench"), {
           cache: "no-store",
@@ -168,6 +196,24 @@ export function SpecialCasesWorkbench() {
           cache: "no-store",
         }),
       ),
+      json<MappingArtifactReadiness>(
+        await fetch(appApiPath("/api/mapping-artifacts/readiness"), {
+          cache: "no-store",
+        }),
+      ),
+      json<MappingArtifactActiveResponse>(
+        await fetch(appApiPath("/api/mapping-artifacts/active"), {
+          cache: "no-store",
+        }),
+      ),
+      json<MappingArtifactActivationHistoryResponse>(
+        await fetch(
+          appApiPath(
+            "/api/mapping-artifacts/activation-history?type=special_cases",
+          ),
+          { cache: "no-store" },
+        ),
+      ),
     ]);
     const nextBaselineVersions = workbench.overview.sourceVersions.filter(
       (version) => isComparisonBaseline(version.sourceType),
@@ -177,6 +223,9 @@ export function SpecialCasesWorkbench() {
     );
     setOverview(workbench.overview);
     setArtifacts(catalog.artifacts);
+    setReadiness(nextReadiness);
+    setActiveArtifactState(active.active);
+    setActivationHistory(history.events);
     setFullArtifactId(
       (current) => current || workbench.overview.activeFullArtifactId || "",
     );
@@ -481,6 +530,7 @@ export function SpecialCasesWorkbench() {
         }),
       );
       if (result.overview) setOverview(result.overview);
+      if (result.version) await refresh();
       setMessage(
         result.version
           ? `Saved immutable Special Cases version ${short(result.version.id)}.`
@@ -497,6 +547,80 @@ export function SpecialCasesWorkbench() {
       return false;
     } finally {
       setBusy(false);
+    }
+  }
+  async function publishSpecialCases(versionId: string) {
+    setPublishingVersionId(versionId);
+    try {
+      const result = await json<{ artifact: MappingArtifact }>(
+        await fetch(appApiPath("/api/mapping-artifacts/publish/special-cases"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ versionId }),
+        }),
+      );
+      await refresh();
+      setMessage(
+        `Published Special Cases draft ${short(result.artifact.id)}. Review validation before committing.`,
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not publish the Special Cases version.",
+      );
+    } finally {
+      setPublishingVersionId(null);
+    }
+  }
+  async function commitSpecialCases(artifactId: string) {
+    setCommittingArtifactId(artifactId);
+    try {
+      const result = await json<{ artifact: MappingArtifact }>(
+        await fetch(
+          appApiPath(`/api/mapping-artifacts/artifacts/${artifactId}/commit`),
+          { method: "POST" },
+        ),
+      );
+      await refresh();
+      setMessage(`Committed Special Cases artifact ${short(result.artifact.id)}.`);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not commit the Special Cases draft.",
+      );
+    } finally {
+      setCommittingArtifactId(null);
+    }
+  }
+  async function activateSpecialCases(artifact: MappingArtifact) {
+    if (
+      !window.confirm(
+        specialCasesActivationConfirmationMessage(artifact, activeSpecialCases),
+      )
+    ) {
+      return;
+    }
+    setActivatingArtifactId(artifact.id);
+    try {
+      const result = await json<MappingArtifactActivationResponse>(
+        await fetch(
+          appApiPath(`/api/mapping-artifacts/artifacts/${artifact.id}/activate`),
+          { method: "POST" },
+        ),
+      );
+      setActiveArtifactState(result.active);
+      await refresh();
+      setMessage(`Activated Special Cases artifact ${short(artifact.id)}.`);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not activate the Special Cases artifact.",
+      );
+    } finally {
+      setActivatingArtifactId(null);
     }
   }
   function updateGroup(
@@ -1243,7 +1367,8 @@ export function SpecialCasesWorkbench() {
                 <h2>4. Investigate affected apps</h2>
                 <p>
                   Review new suspected apps and the selected historical final
-                  entries in one editable working set.
+                  entries in one editable working set. Leave a final revenue
+                  multiplier blank when the Full Mapping value should remain unchanged.
                 </p>
               </div>
               <button
@@ -1530,10 +1655,37 @@ export function SpecialCasesWorkbench() {
               <div>
                 <h2>5. Final Special Cases versions</h2>
                 <p>
-                  Save every included Step 4 row as a new immutable snapshot.
-                  Historical rows can be retained, changed, or removed.
+                  Save the reviewed working set, then publish, validate, commit,
+                  and activate the immutable pipeline artifact.
                 </p>
               </div>
+            </div>
+            <div className="special-cases-active-artifact">
+              <div>
+                <h3>Active Special Cases</h3>
+                <p className="muted-text">
+                  Artifact-mode ETL uses this committed override artifact alongside
+                  the independently active Full Mapping.
+                </p>
+              </div>
+              {activeSpecialCases ? (
+                <div className="list-card">
+                  <strong>{short(activeSpecialCases.artifact.id)}</strong>
+                  <p>
+                    {activeSpecialCases.artifact.row_count} rows · checksum{" "}
+                    {short(activeSpecialCases.artifact.checksum_sha256)}
+                  </p>
+                  <span>
+                    Activated {date(activeSpecialCases.activated_at)} by{" "}
+                    {activeSpecialCases.activated_by || "—"}
+                  </span>
+                </div>
+              ) : (
+                <p className="muted-text">
+                  No active Special Cases artifact. Artifact-mode ETL cannot use
+                  Special Cases until an admin activates a committed version.
+                </p>
+              )}
             </div>
             <div className="special-cases-controls">
               <p className="muted-text">
@@ -1552,26 +1704,183 @@ export function SpecialCasesWorkbench() {
               </button>
             </div>
             <div className="special-cases-version-list">
-              {overview?.finalVersions.map((version) => (
-                <article key={version.id} className="special-cases-version">
-                  <strong>{version.label}</strong>
-                  <p>
-                    {version.rowCount} rows · checksum {short(version.checksum)}{" "}
-                    · source {short(version.sourceVersionId)}
-                  </p>
-                  <p className="muted-text">
-                    Created {date(version.createdAt)} by {version.createdBy}
-                  </p>
-                  <a
-                    className="button button-secondary button-inline"
-                    href={appApiPath(
-                      `/api/special-cases/versions/${version.id}/download`,
-                    )}
+              {overview?.finalVersions.map((version) => {
+                const artifact = findArtifactForSpecialCasesVersion(
+                  version,
+                  specialCasesArtifacts,
+                );
+                const isActive = artifact
+                  ? isActiveSpecialCasesArtifact(artifact.id, activeSpecialCases)
+                  : false;
+                const publishReason = specialCasesPublishDisabledReason(
+                  readiness,
+                  artifact,
+                );
+                const commitReason = specialCasesCommitDisabledReason(
+                  artifact,
+                  readiness,
+                );
+                const activateReason = specialCasesActivationDisabledReason(
+                  artifact,
+                  activeSpecialCases,
+                  readiness,
+                );
+                return (
+                  <article
+                    key={version.id}
+                    className={`special-cases-version${isActive ? " special-cases-version-active" : ""}`}
                   >
-                    Download CSV
-                  </a>
-                </article>
-              ))}
+                    <div className="special-cases-version-heading">
+                      <div>
+                        <strong>{version.label}</strong>
+                        <p>
+                          {version.rowCount} rows · local checksum{" "}
+                          {short(version.checksum)} · Full Mapping{" "}
+                          {short(version.fullArtifactId)}
+                        </p>
+                        <p className="muted-text">
+                          Created {date(version.createdAt)} by {version.createdBy}
+                        </p>
+                      </div>
+                      <div className="action-strip">
+                        <a
+                          className="button button-secondary button-inline"
+                          href={appApiPath(
+                            `/api/special-cases/versions/${version.id}/download`,
+                          )}
+                        >
+                          Download local CSV
+                        </a>
+                        {artifact ? (
+                          <>
+                            <a
+                              className="button button-secondary button-inline"
+                              href={`/artifact-registry/${artifact.id}`}
+                            >
+                              View artifact
+                            </a>
+                            <a
+                              className="button button-secondary button-inline"
+                              href={appApiPath(
+                                `/api/mapping-artifacts/artifacts/${artifact.id}/download`,
+                              )}
+                            >
+                              Download pipeline CSV
+                            </a>
+                          </>
+                        ) : null}
+                        <button
+                          className="button button-secondary button-inline"
+                          type="button"
+                          title={publishReason ?? undefined}
+                          disabled={Boolean(publishReason) || publishingVersionId === version.id}
+                          onClick={() => void publishSpecialCases(version.id)}
+                        >
+                          {publishingVersionId === version.id
+                            ? "Publishing…"
+                            : "Publish draft"}
+                        </button>
+                        {artifact ? (
+                          <button
+                            className="button button-secondary button-inline"
+                            type="button"
+                            title={commitReason ?? undefined}
+                            disabled={Boolean(commitReason) || committingArtifactId === artifact.id}
+                            onClick={() => void commitSpecialCases(artifact.id)}
+                          >
+                            {artifact.status === "committed"
+                              ? "Committed"
+                              : committingArtifactId === artifact.id
+                                ? "Committing…"
+                                : "Commit draft"}
+                          </button>
+                        ) : null}
+                        {artifact && isActive ? (
+                          <span className="active-version-label">Active</span>
+                        ) : artifact ? (
+                          <button
+                            className="button button-primary button-inline"
+                            type="button"
+                            title={activateReason ?? undefined}
+                            disabled={Boolean(activateReason) || activatingArtifactId === artifact.id}
+                            onClick={() => void activateSpecialCases(artifact)}
+                          >
+                            {activatingArtifactId === artifact.id
+                              ? "Activating…"
+                              : "Activate"}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    {artifact ? (
+                      <div className="special-cases-artifact-state">
+                        <p>
+                          Pipeline artifact {short(artifact.id)} · {artifact.status}
+                          {isActive ? " · active" : ""}
+                        </p>
+                        <p>
+                          Validation: {artifact.validation.valid
+                            ? "Passed"
+                            : "Requires review"}
+                        </p>
+                        {artifact.validation.blocking_errors.length ? (
+                          <ul className="error-text">
+                            {artifact.validation.blocking_errors.map((error) => (
+                              <li key={error}>{error}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {artifact.validation.warnings?.length ? (
+                          <ul className="warning-text">
+                            {artifact.validation.warnings.map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="muted-text">
+                        Not published to the SensorTower artifact registry yet.
+                      </p>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+            <div className="special-cases-activation-history">
+              <h3>Special Cases activation history</h3>
+              {activationHistory.length ? (
+                <div className="table-shell">
+                  <table className="enterprise-table">
+                    <thead>
+                      <tr>
+                        <th>Activated</th>
+                        <th>Actor</th>
+                        <th>New artifact</th>
+                        <th>Previous artifact</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activationHistory.map((event) => (
+                        <tr key={String(event.id)}>
+                          <td>{date(event.activated_at)}</td>
+                          <td>{event.activated_by || "—"}</td>
+                          <td>{short(event.artifact_id)}</td>
+                          <td>
+                            {event.previous_artifact_id
+                              ? short(event.previous_artifact_id)
+                              : "Initial activation"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="muted-text">
+                  No Special Cases activation has been recorded yet.
+                </p>
+              )}
             </div>
           </section>
         </div>

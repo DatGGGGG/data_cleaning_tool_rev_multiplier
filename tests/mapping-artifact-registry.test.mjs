@@ -5,6 +5,7 @@ const rawId = "10000000-0000-4000-8000-000000000001";
 const enrichedId = "20000000-0000-4000-8000-000000000002";
 const bottomUpId = "30000000-0000-4000-8000-000000000003";
 const fullId = "40000000-0000-4000-8000-000000000004";
+const specialCasesId = "60000000-0000-4000-8000-000000000006";
 
 function artifact(overrides = {}) {
   return {
@@ -39,15 +40,22 @@ test("registry includes all committed artifact types, excludes drafts, and sorts
   const enriched = artifact({ id: enrichedId, artifact_type: "top_down_with_publisher_ids", committed_at: "2026-09-22T02:00:00.000Z" });
   const bottomUp = artifact({ id: bottomUpId, artifact_type: "bottom_up", committed_at: "2026-09-22T03:00:00.000Z" });
   const full = artifact();
+  const specialCases = artifact({
+    id: specialCasesId,
+    artifact_type: "special_cases",
+    source_workbench_workflow: "special_cases",
+    committed_at: "2026-09-22T05:00:00.000Z",
+  });
   const draft = artifact({ id: "50000000-0000-4000-8000-000000000005", status: "draft", committed_at: null, created_at: "2026-09-22T05:00:00.000Z" });
-  const catalog = [draft, raw, full, enriched, bottomUp];
+  const catalog = [draft, raw, full, enriched, bottomUp, specialCases];
 
-  assert.deepEqual(committedArtifacts(catalog).map((item) => item.id), [fullId, bottomUpId, enrichedId, rawId]);
+  assert.deepEqual(committedArtifacts(catalog).map((item) => item.id), [specialCasesId, fullId, bottomUpId, enrichedId, rawId]);
   assert.deepEqual(artifactCounts(catalog), {
     top_down_raw: 1,
     top_down_with_publisher_ids: 1,
     bottom_up: 1,
     full: 1,
+    special_cases: 1,
   });
   assert.deepEqual(filterCommittedArtifacts(catalog, { type: "bottom_up" }).map((item) => item.id), [bottomUpId]);
 });

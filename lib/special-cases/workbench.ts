@@ -105,7 +105,7 @@ export function adjustmentRows(rows: SpecialCaseInvestigationRow[]) {
     if (appIds.has(row.appId)) errors.push(`Duplicate adjustment for app_id ${row.appId}.`);
     appIds.add(row.appId);
     const multiplier = Number(row.adjustedRevenueMultiplier);
-    if (!Number.isFinite(multiplier) || multiplier <= 0) errors.push(`App ${row.appId} needs a positive adjusted revenue multiplier.`);
+    if (row.adjustedRevenueMultiplier && (!Number.isFinite(multiplier) || multiplier <= 0)) errors.push(`App ${row.appId} needs a positive adjusted revenue multiplier when provided.`);
     if (row.adjustmentMode !== "clear" && row.adjustmentMode !== "set") errors.push(`App ${row.appId} needs an explicit publisher adjustment mode.`);
     if (row.adjustmentMode === "set" && !row.adjustedCleanedPublisherName) errors.push(`App ${row.appId} needs an adjusted cleaned publisher.`);
     output.push({ appId: row.appId, cleanedPublisherName: row.adjustmentMode === "clear" ? "" : row.adjustedCleanedPublisherName, revenueMultiplier: row.adjustedRevenueMultiplier });

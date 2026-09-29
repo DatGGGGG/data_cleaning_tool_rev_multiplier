@@ -5,6 +5,7 @@ import {
 } from "@/lib/mapping-artifacts/job-contract";
 import type {
   MappingArtifact,
+  MappingArtifactActivationHistoryResponse,
   MappingArtifactActivationResponse,
   MappingArtifactActiveResponse,
   MappingArtifactJob,
@@ -100,13 +101,16 @@ export function getRemoteActiveArtifacts() {
 }
 
 export function publishRemoteArtifact(input: {
-  artifactType: "top_down_raw" | "bottom_up";
+  artifactType: "top_down_raw" | "bottom_up" | "special_cases";
   csvContent: string;
   checksumSha256: string;
-  workflow: "top_down" | "bottom_up";
+  workflow: "top_down" | "bottom_up" | "special_cases";
   versionId: string;
   versionLabel: string;
   actor: string;
+  sourceArtifactIds?: string[];
+  sourceArtifactChecksums?: Record<string, string>;
+  provenance?: Record<string, unknown>;
 }) {
   return requestPipeline<{ artifact: MappingArtifact }>("/mapping-artifacts/publish", {
     method: "POST",
@@ -118,6 +122,9 @@ export function publishRemoteArtifact(input: {
       source_workbench_version_id: input.versionId,
       source_workbench_version_label: input.versionLabel,
       created_by: input.actor,
+      source_artifact_ids: input.sourceArtifactIds ?? [],
+      source_artifact_checksums: input.sourceArtifactChecksums ?? {},
+      provenance: input.provenance ?? {},
     }),
   });
 }
@@ -161,11 +168,17 @@ export function commitRemoteArtifact(artifactId: string, actor: string) {
   });
 }
 
-export function activateRemoteFullArtifact(artifactId: string, actor: string) {
+export function activateRemoteArtifact(artifactId: string, actor: string) {
   return requestPipeline<MappingArtifactActivationResponse>(`/mapping-artifacts/${artifactIdPathPart(artifactId)}/activate`, {
     method: "POST",
     body: JSON.stringify({ activated_by: actor }),
   });
+}
+
+export function getRemoteActivationHistory(type: "full" | "special_cases") {
+  return requestPipeline<MappingArtifactActivationHistoryResponse>(
+    `/mapping-artifacts/activation-history?type=${type}`,
+  );
 }
 
 export async function downloadRemoteArtifact(artifactId: string) {

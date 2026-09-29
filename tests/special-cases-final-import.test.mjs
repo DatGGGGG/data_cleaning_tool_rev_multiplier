@@ -11,6 +11,13 @@ test("historical final import preserves blank cleaned publishers", () => {
   ]);
 });
 
+test("historical final import preserves a blank multiplier as no override", () => {
+  const parsed = parseHistoricalFinalCsv("app_id,cleaned_publisher_name,revenue_multiplier\nkeep,VNG,\n");
+  assert.deepEqual(parsed.rows, [
+    { appId: "keep", cleanedPublisherName: "VNG", revenueMultiplier: "" },
+  ]);
+});
+
 test("historical final import rejects duplicate IDs and invalid multipliers", () => {
   assert.throws(() => parseHistoricalFinalCsv("app_id,cleaned_publisher_name,revenue_multiplier\na,,1\na,VNG,2\n"), HistoricalFinalImportError);
   assert.throws(() => parseHistoricalFinalCsv("app_id,cleaned_publisher_name,revenue_multiplier\na,,0\n"), HistoricalFinalImportError);

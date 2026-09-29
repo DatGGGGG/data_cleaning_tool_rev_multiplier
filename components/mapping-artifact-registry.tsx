@@ -6,11 +6,13 @@ import { appApiPath } from "@/lib/app-path";
 import {
   MAPPING_ARTIFACT_TYPES,
   activeFullEntry,
+  activeSpecialCasesEntry,
   artifactCounts,
   artifactTypeLabel,
   artifactValidationLabel,
   filterCommittedArtifacts,
   isActiveFullArtifact,
+  isActiveSpecialCasesArtifact,
   publicArtifactDetails,
   resolveArtifactLineage,
 } from "@/lib/mapping-artifacts/catalog";
@@ -39,6 +41,7 @@ export function MappingArtifactRegistry() {
   const [expandedArtifactIds, setExpandedArtifactIds] = useState<Set<string>>(() => new Set());
 
   const activeFull = activeFullEntry(activeState);
+  const activeSpecialCases = activeSpecialCasesEntry(activeState);
   const counts = useMemo(() => artifactCounts(artifacts), [artifacts]);
   const visibleArtifacts = useMemo(() => filterCommittedArtifacts(artifacts, { type: typeFilter, search }), [artifacts, search, typeFilter]);
   const canRead = Boolean(readiness?.authenticated);
@@ -90,7 +93,7 @@ export function MappingArtifactRegistry() {
   return <div className="workspace-page">
     <section className="page-banner">
       <div><p className="page-kicker">Mapping Artifact Registry</p><h1>Committed Mapping Artifacts</h1><p className="page-summary">Browse immutable committed mapping inputs and outputs. Files remain in the SensorTower pipeline; this registry never exposes internal storage paths.</p></div>
-      <div className="banner-pill-stack"><span className="metric-pill">{visibleArtifacts.length} shown</span><span className="metric-pill">{activeFull ? "Full Mapping active" : "No active Full Mapping"}</span></div>
+      <div className="banner-pill-stack"><span className="metric-pill">{visibleArtifacts.length} shown</span><span className="metric-pill">{activeFull ? "Full Mapping active" : "No active Full Mapping"}</span><span className="metric-pill">{activeSpecialCases ? "Special Cases active" : "No active Special Cases"}</span></div>
     </section>
 
     <section className="surface-card"><div className="section-heading"><div><h2>Registry status</h2><p>{message}</p></div><button type="button" className="button button-secondary" onClick={() => void refresh()}>Refresh</button></div>
@@ -107,6 +110,11 @@ export function MappingArtifactRegistry() {
         <strong className="artifact-summary-active-id" title={activeFull?.artifact.id || undefined}>{activeFull ? short(activeFull.artifact.id) : "None"}</strong>
         <small>{activeFull ? `${activeFull.artifact.row_count} rows · activated ${date(activeFull.activated_at)}` : "Activate a committed Full Mapping as an admin."}</small>
       </article>
+      <article className="artifact-summary-card artifact-active-summary">
+        <span className="artifact-summary-label">Active Special Cases</span>
+        <strong className="artifact-summary-active-id" title={activeSpecialCases?.artifact.id || undefined}>{activeSpecialCases ? short(activeSpecialCases.artifact.id) : "None"}</strong>
+        <small>{activeSpecialCases ? `${activeSpecialCases.artifact.row_count} rows · activated ${date(activeSpecialCases.activated_at)}` : "Activate a committed Special Cases version as an admin."}</small>
+      </article>
     </section>
 
     <section className="surface-card">
@@ -115,16 +123,20 @@ export function MappingArtifactRegistry() {
     </section>
 
     <section className="surface-card">
-      <div className="section-heading"><div><h2>Committed artifacts</h2><p>Newest committed artifacts appear first. This is a read-only cross-workflow audit view; manage activation in Full Mapping.</p></div></div>
+      <div className="section-heading"><div><h2>Committed artifacts</h2><p>Newest committed artifacts appear first. This is a read-only cross-workflow audit view; manage activation from the owning workflow page.</p></div></div>
       {visibleArtifacts.length === 0 ? <p className="muted-text">No committed artifacts match the current filters.</p> : <div className="artifact-registry-list">{visibleArtifacts.map((artifact) => {
-        const active = artifact.artifact_type === "full" && isActiveFullArtifact(artifact.id, activeFull);
+        const active = artifact.artifact_type === "full"
+          ? isActiveFullArtifact(artifact.id, activeFull)
+          : artifact.artifact_type === "special_cases"
+            ? isActiveSpecialCasesArtifact(artifact.id, activeSpecialCases)
+            : false;
         const lineage = resolveArtifactLineage(artifact, artifacts);
         const details = publicArtifactDetails(artifact);
         return <article className={`artifact-registry-card${active ? " artifact-registry-card-active" : ""}`} id={`mapping-artifact-${artifact.id}`} key={artifact.id}>
           <div className="artifact-registry-card-heading"><div><div className="artifact-registry-title"><span className="artifact-type-pill">{artifactTypeLabel(artifact.artifact_type)}</span>{active ? <span className="active-artifact-badge">Active</span> : null}{artifact.bootstrap_import ? <span className="bootstrap-artifact-badge">Bootstrap</span> : null}</div><strong>{artifact.id}</strong><p>{artifact.status} · {artifact.row_count} rows · checksum {short(artifact.checksum_sha256)}</p></div><div className="action-strip"><Link className="button button-secondary button-inline" href={`/artifact-registry/${artifact.id}`}>View</Link>{canRead ? <a className="button button-secondary button-inline" href={appApiPath(`/api/mapping-artifacts/artifacts/${artifact.id}/download`)}>Download CSV</a> : null}{active ? <span className="active-version-label">Active</span> : null}</div></div>
           <dl className="artifact-registry-metadata"><div><dt>Created</dt><dd>{date(details.createdAt)} by {details.createdBy || "—"}</dd></div><div><dt>Committed</dt><dd>{date(details.committedAt)} by {details.committedBy || "—"}</dd></div><div><dt>Validation</dt><dd>{artifactValidationLabel(artifact)}</dd></div><div><dt>Source</dt><dd>{details.sourceWorkflow || "—"}{details.sourceVersionLabel ? ` · ${details.sourceVersionLabel}` : ""}</dd></div></dl>
           <div className="artifact-registry-lineage"><strong>Source lineage</strong>{lineage.length ? <ul>{lineage.map((source) => <li key={source.id}>{source.artifact ? <button type="button" className="artifact-lineage-link" onClick={() => openArtifactDetails(source.id)}>{source.id}</button> : <code>{source.id}</code>}{source.checksum ? <span> · {short(source.checksum)}</span> : null}{source.artifact ? <span> · {artifactTypeLabel(source.artifact.artifact_type)}</span> : <span> · recorded lineage</span>}</li>)}</ul> : <p>No source artifacts recorded.</p>}</div>
-          <details className="artifact-registry-details" open={expandedArtifactIds.has(artifact.id)} onToggle={(event) => toggleDetails(artifact.id, event.currentTarget.open)}><summary>Show metadata and validation details</summary><dl><div><dt>Canonical filename</dt><dd>{details.canonicalFilename}</dd></div><div><dt>Schema version</dt><dd>{details.schemaVersion}</dd></div><div><dt>Checksum</dt><dd>{details.checksum}</dd></div><div><dt>Workbench source version</dt><dd>{details.sourceVersionId || "—"}</dd></div><div><dt>Generator / repository</dt><dd>{details.generatorVersion || "—"}{details.repositoryGitSha ? ` · ${details.repositoryGitSha}` : ""}</dd></div><div><dt>Bootstrap import</dt><dd>{details.bootstrapImport ? "Yes" : "No"}</dd></div><div><dt>Required columns</dt><dd>{details.validation.required_columns.join(", ") || "—"}</dd></div><div><dt>Missing values</dt><dd>{Object.keys(details.validation.missing_value_counts).length ? Object.entries(details.validation.missing_value_counts).map(([field, count]) => `${field}: ${count}`).join(", ") : "None"}</dd></div><div><dt>Blocking errors</dt><dd>{details.validation.blocking_errors.join(" ") || "None"}</dd></div><div><dt>Recorded source checksums</dt><dd>{Object.entries(details.sourceArtifactChecksums).map(([id, checksum]) => `${id}: ${checksum}`).join("; ") || "—"}</dd></div></dl></details>
+          <details className="artifact-registry-details" open={expandedArtifactIds.has(artifact.id)} onToggle={(event) => toggleDetails(artifact.id, event.currentTarget.open)}><summary>Show metadata and validation details</summary><dl><div><dt>Canonical filename</dt><dd>{details.canonicalFilename}</dd></div><div><dt>Schema version</dt><dd>{details.schemaVersion}</dd></div><div><dt>Checksum</dt><dd>{details.checksum}</dd></div><div><dt>Workbench source version</dt><dd>{details.sourceVersionId || "—"}</dd></div><div><dt>Generator / repository</dt><dd>{details.generatorVersion || "—"}{details.repositoryGitSha ? ` · ${details.repositoryGitSha}` : ""}</dd></div><div><dt>Bootstrap import</dt><dd>{details.bootstrapImport ? "Yes" : "No"}</dd></div><div><dt>Required columns</dt><dd>{details.validation.required_columns.join(", ") || "—"}</dd></div><div><dt>Missing values</dt><dd>{Object.keys(details.validation.missing_value_counts).length ? Object.entries(details.validation.missing_value_counts).map(([field, count]) => `${field}: ${count}`).join(", ") : "None"}</dd></div><div><dt>Duplicate app IDs</dt><dd>{details.validation.duplicate_app_id_count || "None"}</dd></div><div><dt>Invalid multipliers</dt><dd>{details.validation.invalid_multiplier_count || "None"}</dd></div><div><dt>Warnings</dt><dd>{details.validation.warnings?.join(" ") || "None"}</dd></div><div><dt>Blocking errors</dt><dd>{details.validation.blocking_errors.join(" ") || "None"}</dd></div><div><dt>Recorded source checksums</dt><dd>{Object.entries(details.sourceArtifactChecksums).map(([id, checksum]) => `${id}: ${checksum}`).join("; ") || "—"}</dd></div></dl></details>
         </article>;
       })}</div>}
     </section>

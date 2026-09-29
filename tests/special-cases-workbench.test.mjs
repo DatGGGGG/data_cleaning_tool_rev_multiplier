@@ -20,6 +20,12 @@ test("set publisher requires a nonblank publisher and positive multiplier", () =
   assert.equal(result.errors.length, 2);
 });
 
+test("a blank final multiplier is retained as an explicit no-override value", () => {
+  const result = adjustmentRows([{ ...base, isNewApp: false, isSuspected: true, isChecked: true, needReadjustment: true, adjustmentMode: "set", adjustedCleanedPublisherName: "VNG", adjustedRevenueMultiplier: "", notes: "" }]);
+  assert.deepEqual(result.errors, []);
+  assert.equal(buildFinalCsv(result.rows), "app_id,cleaned_publisher_name,revenue_multiplier\napp-1,VNG,\n");
+});
+
 test("historical final rows remain editable while new Special Cases start excluded", () => {
   const rows = finalWorkingRows(
     [{ ...base, appId: "old" }, { ...base, appId: "new" }],

@@ -79,8 +79,8 @@ test("pipeline activation response preserves its active pointer shape and an act
       assert.deepEqual(JSON.parse(init?.body), { activated_by: "Admin" });
       return Response.json({ status: "activated", active });
     };
-    const { activateRemoteFullArtifact } = await import("../lib/mapping-artifacts/client.ts");
-    const response = await activateRemoteFullArtifact(fullId, "Admin");
+    const { activateRemoteArtifact } = await import("../lib/mapping-artifacts/client.ts");
+    const response = await activateRemoteArtifact(fullId, "Admin");
     assert.equal(response.status, "activated");
     assert.equal(response.active.full?.artifact.id, fullId);
 

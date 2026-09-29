@@ -29,7 +29,7 @@ export function parseHistoricalFinalCsv(content: string) {
     if (!appId) throw new HistoricalFinalImportError("Historical final CSV contains a blank app_id.");
     if (ids.has(appId)) throw new HistoricalFinalImportError(`Historical final CSV contains duplicate app_id ${appId}.`);
     const multiplier = Number(revenueMultiplier);
-    if (!Number.isFinite(multiplier) || multiplier <= 0)
+    if (revenueMultiplier && (!Number.isFinite(multiplier) || multiplier <= 0))
       throw new HistoricalFinalImportError(`App ${appId} needs a positive revenue_multiplier.`);
     ids.add(appId);
     rows.push({ appId, cleanedPublisherName, revenueMultiplier });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import {
-  activateRemoteFullArtifact,
+  activateRemoteArtifact,
   commitRemoteArtifact,
   generateRemoteFull,
   getRemoteActiveArtifacts,
@@ -27,6 +27,7 @@ import { isActiveEnrichmentJobStatus } from "@/lib/mapping-artifacts/job-contrac
 import type { MappingArtifactCsvPreview, MappingArtifactJobResume, MappingArtifactType, StoredTopDownEnrichmentJob } from "@/lib/mapping-artifacts/types";
 import { exportBottomUpVersionCsv, listBottomUpVersions } from "@/lib/bottom-up/server";
 import { exportTopDownVersionCsv, getTopDownVersionFreshness, listTopDownVersions } from "@/lib/top-down/server";
+import { downloadSpecialCaseFinal, getSpecialCaseFinalVersion } from "@/lib/special-cases/server";
 import type { WorkbenchPrincipal } from "@/lib/mapping-artifacts/auth";
 import { parseCsvPreview } from "@/lib/csv-preview";
 
@@ -189,6 +190,58 @@ export async function publishSavedBottomUpVersion(versionId: string, principal: 
   return remote;
 }
 
+export async function publishSavedSpecialCasesVersion(
+  versionId: string,
+  principal: WorkbenchPrincipal,
+) {
+  const version = await getSpecialCaseFinalVersion(versionId);
+  const exported = await downloadSpecialCaseFinal(versionId);
+  requireNonemptyCsv(exported.content, "Special Cases");
+  const localChecksum = assertChecksum(exported.content, version.checksum);
+  let sourceArtifactIds: string[] = [];
+  let sourceArtifactChecksums: Record<string, string> = {};
+  if (version.fullArtifactId) {
+    const source = await getRemoteArtifact(version.fullArtifactId);
+    if (source.artifact.artifact_type !== "full" || source.artifact.status !== "committed") {
+      throw new MappingArtifactWorkbenchError(
+        "invalid_source_artifact",
+        "The Special Cases version is not linked to a committed Full Mapping artifact.",
+        409,
+      );
+    }
+    sourceArtifactIds = [source.artifact.id];
+    sourceArtifactChecksums = { [source.artifact.id]: source.artifact.checksum_sha256 };
+  }
+  const remote = await publishRemoteArtifact({
+    artifactType: "special_cases",
+    csvContent: exported.content,
+    checksumSha256: localChecksum,
+    workflow: "special_cases",
+    versionId,
+    versionLabel: version.label,
+    actor: principal.displayName,
+    sourceArtifactIds,
+    sourceArtifactChecksums,
+    provenance: {
+      historical_final_version_id: version.historicalVersionId,
+      local_version_type: version.versionType,
+      original_filename: version.originalFilename,
+    },
+  });
+  await savePublicationReceipt({
+    workflow: "special_cases",
+    localVersionId: version.id,
+    localVersionLabel: version.label,
+    localChecksumSha256: localChecksum,
+    remoteArtifactId: remote.artifact.id,
+    remoteArtifactType: "special_cases",
+    remoteStatus: remote.artifact.status,
+    publishedAt: new Date().toISOString(),
+    publishedBy: principal.displayName,
+  });
+  return remote;
+}
+
 export async function startTopDownEnrichment(sourceArtifactId: string, localTopDownVersionId: string, principal: WorkbenchPrincipal) {
   return withTopDownEnrichmentStartLock(async () => {
     const local = await readMappingArtifactStore();
@@ -259,21 +312,51 @@ export async function createFullMapping(topDownArtifactId: string, bottomUpArtif
 }
 
 export async function commitMappingArtifact(artifactId: string, principal: WorkbenchPrincipal) {
+  const before = await getRemoteArtifact(artifactId);
   const result = await commitRemoteArtifact(artifactId, principal.displayName);
-  await mutateMappingArtifactStore((store) => store.activity.unshift(createIntegrationLog("mapping_artifact_committed", principal.displayName, "mapping_artifact", artifactId, "Committed generated mapping artifact.")));
+  await mutateMappingArtifactStore((store) => {
+    const action = before.artifact.artifact_type === "special_cases"
+      ? "special_cases_artifact_committed"
+      : "mapping_artifact_committed";
+    store.activity.unshift(createIntegrationLog(
+      action,
+      principal.displayName,
+      "mapping_artifact",
+      artifactId,
+      `Committed ${before.artifact.artifact_type} mapping artifact.`,
+    ));
+    store.activity = store.activity.slice(0, 250);
+  });
+  return result;
+}
+
+export async function activateMappingArtifact(artifactId: string, principal: WorkbenchPrincipal) {
+  const candidate = await getRemoteArtifact(artifactId);
+  if (candidate.artifact.artifact_type !== "full" && candidate.artifact.artifact_type !== "special_cases") {
+    throw new MappingArtifactWorkbenchError("invalid_artifact_type", "Only Full Mapping or Special Cases artifacts can be activated.", 422);
+  }
+  if (candidate.artifact.status !== "committed") {
+    throw new MappingArtifactWorkbenchError("invalid_artifact_status", "Only committed mapping artifacts can be activated.", 409);
+  }
+  const before = await getRemoteActiveArtifacts();
+  const previousArtifactId = before.active[candidate.artifact.artifact_type]?.artifact.id ?? null;
+  const result = await activateRemoteArtifact(artifactId, principal.displayName);
+  await mutateMappingArtifactStore((store) => {
+    const action = candidate.artifact.artifact_type === "special_cases"
+      ? "special_cases_artifact_activated"
+      : "full_mapping_activated";
+    store.activity.unshift(createIntegrationLog(
+      action,
+      principal.displayName,
+      "mapping_artifact",
+      artifactId,
+      `Activated committed ${candidate.artifact.artifact_type} artifact ${artifactId}; previous active artifact: ${previousArtifactId ?? "none"}.`,
+    ));
+    store.activity = store.activity.slice(0, 250);
+  });
   return result;
 }
 
 export async function activateFullMappingArtifact(artifactId: string, principal: WorkbenchPrincipal) {
-  const before = await getRemoteActiveArtifacts();
-  const previousArtifactId = before.active.full?.artifact.id ?? null;
-  const result = await activateRemoteFullArtifact(artifactId, principal.displayName);
-  await mutateMappingArtifactStore((store) => store.activity.unshift(createIntegrationLog(
-    "full_mapping_activated",
-    principal.displayName,
-    "mapping_artifact",
-    artifactId,
-    `Activated committed Full Mapping artifact ${artifactId}; previous active artifact: ${previousArtifactId ?? "none"}.`,
-  )));
-  return result;
+  return activateMappingArtifact(artifactId, principal);
 }

@@ -2,16 +2,22 @@ export type MappingArtifactType =
   | "top_down_raw"
   | "top_down_with_publisher_ids"
   | "bottom_up"
-  | "full";
+  | "full"
+  | "special_cases";
 
 export type MappingArtifactStatus = "draft" | "committed";
 
 export type MappingArtifactValidation = {
   required_columns: string[];
+  headers: string[];
+  row_count: number;
   missing_value_counts: Record<string, number>;
   duplicate_row_count: number;
   conflicting_key_count: number;
   unresolved_publisher_id_count: number;
+  invalid_multiplier_count: number;
+  duplicate_app_id_count: number;
+  warnings: string[];
   valid: boolean;
   blocking_errors: string[];
 };
@@ -48,6 +54,7 @@ export type MappingArtifactActiveEntry = {
 
 export type MappingArtifactActiveState = Record<string, MappingArtifactActiveEntry | null> & {
   full: MappingArtifactActiveEntry | null;
+  special_cases: MappingArtifactActiveEntry | null;
 };
 
 export type MappingArtifactActiveResponse = {
@@ -67,6 +74,20 @@ export type MappingArtifactCsvPreview = {
 
 export type MappingArtifactActivationResponse = MappingArtifactActiveResponse & {
   status: string;
+};
+
+export type MappingArtifactActivationEvent = {
+  id: number | string;
+  artifact_type: "full" | "special_cases";
+  previous_artifact_id: string | null;
+  artifact_id: string;
+  activated_at: string;
+  activated_by: string;
+};
+
+export type MappingArtifactActivationHistoryResponse = {
+  status: string;
+  events: MappingArtifactActivationEvent[];
 };
 
 export type MappingArtifactJobStatus = "queued" | "running" | "success" | "failed" | "interrupted";
@@ -115,13 +136,13 @@ export type MappingArtifactReadiness = {
 };
 
 export type MappingArtifactPublicationReceipt = {
-  workflow: "top_down" | "bottom_up";
+  workflow: "top_down" | "bottom_up" | "special_cases";
   localVersionId: string;
   localVersionLabel: string;
   localChecksumSha256: string;
   remoteArtifactId: string;
-  remoteArtifactType: "top_down_raw" | "bottom_up";
-  remoteStatus: "committed";
+  remoteArtifactType: "top_down_raw" | "bottom_up" | "special_cases";
+  remoteStatus: "draft" | "committed";
   publishedAt: string;
   publishedBy: string;
 };

@@ -839,7 +839,6 @@ export async function getInvestigationPage(query: {
       (row) =>
         row.needReadjustment &&
         (!row.adjustmentMode ||
-          !row.adjustedRevenueMultiplier ||
           (row.adjustmentMode === "set" && !row.adjustedCleanedPublisherName)),
     );
   rows.sort(
@@ -919,11 +918,16 @@ export async function downloadSpecialCaseSource(id: string) {
   };
 }
 export async function downloadSpecialCaseFinal(id: string) {
-  const current = await store();
-  if (!current.finalVersions.some((item) => item.id === id))
-    throw new Error("Special Cases final version was not found.");
+  await getSpecialCaseFinalVersion(id);
   return {
     filename: `mapping_app_to_revenue_multiplier_special_cases_${id}.csv`,
     content: await fs.readFile(finalPath(id), "utf8"),
   };
+}
+
+export async function getSpecialCaseFinalVersion(id: string) {
+  const current = await store();
+  const version = current.finalVersions.find((item) => item.id === id);
+  if (!version) throw new Error("Special Cases final version was not found.");
+  return version;
 }

@@ -27,11 +27,59 @@ import {
   type SpecialCasePublisherSortField,
 } from "@/lib/special-cases/publisher-groups";
 import type {
+  SpecialCaseInvestigationFilterField,
+  SpecialCaseInvestigationFilterOperator,
+  SpecialCaseInvestigationFilterRule,
   SpecialCaseInvestigationRow,
+  SpecialCaseInvestigationSortDirection,
+  SpecialCaseInvestigationSortField,
   SpecialCaseJob,
   SpecialCasePublisherGroup,
   SpecialCasesOverview,
 } from "@/lib/special-cases/types";
+
+const investigationFieldOptions: { field: SpecialCaseInvestigationFilterField; label: string }[] = [
+  { field: "all", label: "All fields" }, { field: "appId", label: "App ID" }, { field: "name", label: "App name" },
+  { field: "url", label: "URL" }, { field: "publisherId", label: "Publisher ID" }, { field: "publisherName", label: "Publisher name" },
+  { field: "cleanedPublisherName", label: "Cleaned publisher" }, { field: "revenueMultiplier", label: "Revenue multiplier" },
+  { field: "historicalCleanedPublisherName", label: "Historical cleaned publisher" }, { field: "historicalRevenueMultiplier", label: "Historical revenue multiplier" },
+  { field: "isNewSpecialCase", label: "New Special Case" }, { field: "isHistoricalFinal", label: "Historical final" },
+  { field: "needReadjustment", label: "Included in final" }, { field: "incomplete", label: "Incomplete" },
+  { field: "isChecked", label: "Checked" }, { field: "adjustmentMode", label: "Final adjustment mode" },
+  { field: "adjustedCleanedPublisherName", label: "Final cleaned publisher" }, { field: "adjustedRevenueMultiplier", label: "Final revenue multiplier" },
+  { field: "notes", label: "Notes" },
+];
+const textInvestigationFields = new Set<SpecialCaseInvestigationFilterField>(["all", "appId", "name", "url", "publisherId", "publisherName", "cleanedPublisherName", "historicalCleanedPublisherName", "adjustedCleanedPublisherName", "notes"]);
+const numericInvestigationFields = new Set<SpecialCaseInvestigationFilterField>(["revenueMultiplier", "historicalRevenueMultiplier", "adjustedRevenueMultiplier"]);
+const investigationSortColumns: { field: SpecialCaseInvestigationSortField; label: string }[] = [
+  { field: "appId", label: "app_id" }, { field: "name", label: "name" }, { field: "publisherId", label: "publisher_id" },
+  { field: "publisherName", label: "publisher_name" }, { field: "cleanedPublisherName", label: "cleaned_publisher_name" },
+  { field: "revenueMultiplier", label: "revenue_multiplier" }, { field: "isHistoricalFinal", label: "Historical final" },
+  { field: "needReadjustment", label: "Include in final" }, { field: "adjustedCleanedPublisherName", label: "Final cleaned_publisher_name" },
+  { field: "adjustedRevenueMultiplier", label: "Final revenue_multiplier" },
+];
+function filterOperators(field: SpecialCaseInvestigationFilterField): { value: SpecialCaseInvestigationFilterOperator; label: string }[] {
+  if (textInvestigationFields.has(field)) return [
+    { value: "contains", label: "Contains" }, { value: "not_contains", label: "Does not contain" }, { value: "equals", label: "Equals" },
+    { value: "not_equals", label: "Does not equal" }, { value: "starts_with", label: "Starts with" }, { value: "ends_with", label: "Ends with" },
+    { value: "is_blank", label: "Is blank" }, { value: "is_not_blank", label: "Is not blank" },
+  ];
+  if (numericInvestigationFields.has(field)) return [
+    { value: "equals", label: "Equals" }, { value: "not_equals", label: "Does not equal" }, { value: "greater_than", label: "Greater than" },
+    { value: "greater_than_or_equal", label: "At least" }, { value: "less_than", label: "Less than" }, { value: "less_than_or_equal", label: "At most" },
+    { value: "is_blank", label: "Is blank" }, { value: "is_not_blank", label: "Is not blank" },
+  ];
+  return [{ value: "is", label: "Is" }, { value: "is_not", label: "Is not" }];
+}
+function defaultFilterOperator(field: SpecialCaseInvestigationFilterField) { return filterOperators(field)[0].value; }
+function filterValueOptions(field: SpecialCaseInvestigationFilterField) {
+  if (["isNewSpecialCase", "isHistoricalFinal", "needReadjustment", "incomplete", "isChecked"].includes(field)) return [{ value: "true", label: "Yes" }, { value: "false", label: "No" }];
+  if (field === "adjustmentMode") return [{ value: "none", label: "No action selected" }, { value: "clear", label: "Clear cleaned publisher" }, { value: "set", label: "Set cleaned publisher" }];
+  return null;
+}
+function createInvestigationFilter(field: SpecialCaseInvestigationFilterField = "all"): SpecialCaseInvestigationFilterRule {
+  return { id: `investigation-filter-${Date.now()}-${Math.random().toString(36).slice(2)}`, field, operator: defaultFilterOperator(field), value: "" };
+}
 
 const short = (value: string | null | undefined) =>
   value ? (value.length > 12 ? `${value.slice(0, 12)}…` : value) : "—";
@@ -62,7 +110,7 @@ const sortableColumns: {
   { field: "isSuspected", label: "Suspected" },
   { field: "isChecked", label: "Checked" },
 ];
-type Investigation = { rows: SpecialCaseInvestigationRow[]; total: number };
+type Investigation = { rows: SpecialCaseInvestigationRow[]; total: number; unfilteredTotal: number };
 type VersionActionFeedback = {
   tone: "success" | "error" | "info";
   message: string;
@@ -90,11 +138,15 @@ export function SpecialCasesWorkbench() {
   const [job, setJob] = useState<SpecialCaseJob | null>(null);
   const [rows, setRows] = useState<SpecialCaseInvestigationRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [unfilteredTotal, setUnfilteredTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [newOnly, setNewOnly] = useState(false);
-  const [adjustmentsOnly, setAdjustmentsOnly] = useState(false);
-  const [incompleteOnly, setIncompleteOnly] = useState(false);
+  const [investigationPageSize, setInvestigationPageSize] = useState<(typeof pageSizes)[number]>(25);
+  const [draftInvestigationFilters, setDraftInvestigationFilters] = useState<SpecialCaseInvestigationFilterRule[]>([]);
+  const [appliedInvestigationFilters, setAppliedInvestigationFilters] = useState<SpecialCaseInvestigationFilterRule[]>([]);
+  const [investigationSortField, setInvestigationSortField] = useState<SpecialCaseInvestigationSortField>("publisherName");
+  const [investigationSortDirection, setInvestigationSortDirection] = useState<SpecialCaseInvestigationSortDirection>("asc");
+  const pendingAppReviews = useRef(new Map<string, SpecialCaseInvestigationRow>());
+  const [pendingAppReviewCount, setPendingAppReviewCount] = useState(0);
   const [publisherFilters, setPublisherFilters] = useState(blankFilters);
   const [publisherSortField, setPublisherSortField] =
     useState<SpecialCasePublisherSortField>("appCount");
@@ -286,23 +338,24 @@ export function SpecialCasesWorkbench() {
     if (!currentId) {
       setRows([]);
       setTotal(0);
+      setUnfilteredTotal(0);
       return;
     }
     const query = new URLSearchParams({
       page: String(page),
-      pageSize: "25",
-      search,
-      newOnly: String(newOnly),
-      adjustmentsOnly: String(adjustmentsOnly),
-      incompleteOnly: String(incompleteOnly),
+      pageSize: String(investigationPageSize),
+      filters: JSON.stringify(appliedInvestigationFilters),
+      sortField: investigationSortField,
+      sortDirection: investigationSortDirection,
     });
     const result = await json<Investigation>(
       await fetch(appApiPath(`/api/special-cases/investigation?${query}`), {
         cache: "no-store",
       }),
     );
-    setRows(result.rows);
+    setRows(result.rows.map((row) => pendingAppReviews.current.get(row.appId) ?? row));
     setTotal(result.total);
+    setUnfilteredTotal(result.unfilteredTotal);
   }
   useEffect(() => {
     void refresh().catch((error) =>
@@ -321,9 +374,11 @@ export function SpecialCasesWorkbench() {
           : "Could not load investigation rows.",
       ),
     );
-  }, [currentId, page, search, newOnly, adjustmentsOnly, incompleteOnly]);
+  }, [currentId, page, investigationPageSize, appliedInvestigationFilters, investigationSortField, investigationSortDirection]);
   useEffect(() => {
-    if (selectedFinalBaselineId) setNewOnly(true);
+    if (!selectedFinalBaselineId) return;
+    setDraftInvestigationFilters((current) => current.some((filter) => filter.field === "isNewSpecialCase") ? current : [...current, { ...createInvestigationFilter("isNewSpecialCase"), operator: "is", value: "true" }]);
+    setAppliedInvestigationFilters((current) => current.some((filter) => filter.field === "isNewSpecialCase") ? current : [...current, { ...createInvestigationFilter("isNewSpecialCase"), operator: "is", value: "true" }]);
   }, [selectedFinalBaselineId]);
   useEffect(() => {
     if (!job || job.status === "success" || job.status === "failed") return;
@@ -485,7 +540,7 @@ export function SpecialCasesWorkbench() {
       }>(await fetch(appApiPath("/api/special-cases/final-versions/import"), { method: "POST", body: formData }));
       setOverview(result.overview);
       setPage(1);
-      setNewOnly(true);
+      setQuickInvestigationFilter("isNewSpecialCase", true);
       await loadRows();
       setMessage(result.importSummary.alreadyExisted
         ? `${result.importSummary.filename} was already imported and is selected as the historical final baseline.`
@@ -692,10 +747,50 @@ export function SpecialCasesWorkbench() {
     appId: string,
     change: Partial<SpecialCaseInvestigationRow>,
   ) {
-    setRows((current) =>
-      current.map((row) => (row.appId === appId ? { ...row, ...change } : row)),
-    );
+    setRows((current) => current.map((row) => {
+      if (row.appId !== appId) return row;
+      const next = { ...row, ...change };
+      pendingAppReviews.current.set(appId, next);
+      return next;
+    }));
+    setPendingAppReviewCount(pendingAppReviews.current.size);
   }
+  function updateInvestigationFilter(id: string, change: Partial<SpecialCaseInvestigationFilterRule>) {
+    setDraftInvestigationFilters((current) => current.map((filter) => {
+      if (filter.id !== id) return filter;
+      const next = { ...filter, ...change };
+      if (change.field) return { ...next, operator: defaultFilterOperator(change.field), value: "" };
+      return next;
+    }));
+  }
+  function applyInvestigationFilters() {
+    setAppliedInvestigationFilters(draftInvestigationFilters.map((filter) => ({ ...filter })));
+    setPage(1);
+  }
+  function clearInvestigationFilters() {
+    setDraftInvestigationFilters([]);
+    setAppliedInvestigationFilters([]);
+    setPage(1);
+  }
+  function setQuickInvestigationFilter(field: SpecialCaseInvestigationFilterField, checked: boolean) {
+    const update = (current: SpecialCaseInvestigationFilterRule[]): SpecialCaseInvestigationFilterRule[] => {
+      const without = current.filter((filter) => filter.field !== field);
+      const next: SpecialCaseInvestigationFilterRule = { ...createInvestigationFilter(field), operator: "is", value: "true" };
+      return checked ? [...without, next] : without;
+    };
+    setDraftInvestigationFilters(update);
+    setAppliedInvestigationFilters(update);
+    setPage(1);
+  }
+  function toggleInvestigationSort(field: SpecialCaseInvestigationSortField) {
+    if (field === investigationSortField) setInvestigationSortDirection((current) => current === "asc" ? "desc" : "asc");
+    else {
+      setInvestigationSortField(field);
+      setInvestigationSortDirection(field === "appId" || field === "name" || field === "publisherId" || field === "publisherName" || field === "cleanedPublisherName" || field === "adjustedCleanedPublisherName" ? "asc" : "desc");
+    }
+    setPage(1);
+  }
+  const investigationSortMarker = (field: SpecialCaseInvestigationSortField) => investigationSortField === field ? investigationSortDirection === "asc" ? " ↑" : " ↓" : "";
   const updateFilters = (change: Partial<SpecialCasePublisherGroupFilters>) => {
     setPublisherFilters((current) => ({ ...current, ...change }));
     setPublisherPage(1);
@@ -722,12 +817,12 @@ export function SpecialCasesWorkbench() {
         : " ↓"
       : "";
   async function saveRows() {
-    if (currentId)
-      await action({
+    if (!currentId || !pendingAppReviews.current.size) return;
+    const saved = await action({
         action: "save_reviews",
         sourceVersionId: currentId,
         finalVersionId: selectedFinalBaselineId || null,
-        entries: rows.map((row) => ({
+        entries: [...pendingAppReviews.current.values()].map((row) => ({
           appId: row.appId,
           needReadjustment: row.needReadjustment,
           adjustmentMode: row.adjustmentMode,
@@ -736,6 +831,10 @@ export function SpecialCasesWorkbench() {
           notes: row.notes,
         })),
       });
+    if (saved) {
+      pendingAppReviews.current.clear();
+      setPendingAppReviewCount(0);
+    }
   }
   async function savePublisherReviews() {
     if (await action({ action: "save_publishers", entries: groups }))
@@ -1421,10 +1520,10 @@ export function SpecialCasesWorkbench() {
               <button
                 className="button button-primary"
                 type="button"
-                disabled={!canMutate || !rows.length}
+                disabled={!canMutate || !pendingAppReviewCount}
                 onClick={() => void saveRows()}
               >
-                Save app reviews
+                {pendingAppReviewCount ? `Save ${pendingAppReviewCount} app review${pendingAppReviewCount === 1 ? "" : "s"}` : "No unsaved app reviews"}
               </button>
             </div>
             <div className="special-cases-controls">
@@ -1468,23 +1567,43 @@ export function SpecialCasesWorkbench() {
               </button>
               {selectedFinalBaselineId ? <span className="active-version-label">Baseline selected</span> : null}
             </div>
-            <div className="special-cases-filters">
-              <input
-                value={search}
-                placeholder="Search app, publisher, or ID"
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setPage(1);
-                }}
-              />
+            <div className="special-cases-filters special-cases-investigation-filters">
+              <div className="filter-builder-heading">
+                <strong>Filters</strong>
+                <span className="muted-text">Rules combine with AND. Changes apply only when you press Apply Filters.</span>
+              </div>
+              {draftInvestigationFilters.map((filter) => {
+                const values = filterValueOptions(filter.field);
+                const hidesValue = filter.operator === "is_blank" || filter.operator === "is_not_blank";
+                return <div className="filter-builder-row" key={filter.id}>
+                  <select value={filter.field} onChange={(event) => updateInvestigationFilter(filter.id, { field: event.target.value as SpecialCaseInvestigationFilterField })}>
+                    {investigationFieldOptions.map((option) => <option key={option.field} value={option.field}>{option.label}</option>)}
+                  </select>
+                  <select value={filter.operator} onChange={(event) => updateInvestigationFilter(filter.id, { operator: event.target.value as SpecialCaseInvestigationFilterOperator })}>
+                    {filterOperators(filter.field).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                  {!hidesValue && (values ? (
+                    <select value={filter.value ?? ""} onChange={(event) => updateInvestigationFilter(filter.id, { value: event.target.value })}>
+                      <option value="">Select value</option>
+                      {values.map((option) => <option key={option.value || "blank"} value={option.value}>{option.label}</option>)}
+                    </select>
+                  ) : (
+                    <input value={filter.value ?? ""} type={numericInvestigationFields.has(filter.field) ? "number" : "text"} step={numericInvestigationFields.has(filter.field) ? "any" : undefined} placeholder={numericInvestigationFields.has(filter.field) ? "Number" : "Filter value"} onChange={(event) => updateInvestigationFilter(filter.id, { value: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") applyInvestigationFilters(); }} />
+                  ))}
+                  <button type="button" className="button button-secondary" onClick={() => setDraftInvestigationFilters((current) => current.filter((item) => item.id !== filter.id))}>Remove</button>
+                </div>;
+              })}
+              <div className="filter-builder-actions">
+                <button type="button" className="button button-secondary" onClick={() => setDraftInvestigationFilters((current) => [...current, createInvestigationFilter()])} disabled={draftInvestigationFilters.length >= 10}>Add Filter</button>
+                <button type="button" className="button button-primary" onClick={applyInvestigationFilters}>Apply Filters</button>
+                <button type="button" className="button button-secondary" onClick={clearInvestigationFilters}>Clear Filters</button>
+              </div>
+              <div className="special-cases-quick-filters">
               <label>
                 <input
                   type="checkbox"
-                  checked={newOnly}
-                  onChange={(event) => {
-                    setNewOnly(event.target.checked);
-                    setPage(1);
-                  }}
+                  checked={appliedInvestigationFilters.some((filter) => filter.field === "isNewSpecialCase" && filter.operator === "is" && filter.value === "true")}
+                  onChange={(event) => setQuickInvestigationFilter("isNewSpecialCase", event.target.checked)}
                   disabled={!selectedFinalBaselineId}
                 />{" "}
                 New Special Cases only
@@ -1492,41 +1611,28 @@ export function SpecialCasesWorkbench() {
               <label>
                 <input
                   type="checkbox"
-                  checked={adjustmentsOnly}
-                  onChange={(event) => {
-                    setAdjustmentsOnly(event.target.checked);
-                    setPage(1);
-                  }}
+                  checked={appliedInvestigationFilters.some((filter) => filter.field === "needReadjustment" && filter.operator === "is" && filter.value === "true")}
+                  onChange={(event) => setQuickInvestigationFilter("needReadjustment", event.target.checked)}
                 />{" "}
                 Adjustments only
               </label>
               <label>
                 <input
                   type="checkbox"
-                  checked={incompleteOnly}
-                  onChange={(event) => {
-                    setIncompleteOnly(event.target.checked);
-                    setPage(1);
-                  }}
+                  checked={appliedInvestigationFilters.some((filter) => filter.field === "incomplete" && filter.operator === "is" && filter.value === "true")}
+                  onChange={(event) => setQuickInvestigationFilter("incomplete", event.target.checked)}
                 />{" "}
                 Incomplete only
               </label>
+            </div>
             </div>
             <div className="table-shell">
               <table className="enterprise-table special-cases-table">
                 <thead>
                   <tr>
-                    <th>app_id</th>
-                    <th>name</th>
+                    {investigationSortColumns.slice(0, 2).map((column) => <th key={column.field}><button type="button" className="table-sort-button" onClick={() => toggleInvestigationSort(column.field)}>{column.label}{investigationSortMarker(column.field)}</button></th>)}
                     <th>url</th>
-                    <th>publisher_id</th>
-                    <th>publisher_name</th>
-                    <th>cleaned_publisher_name</th>
-                    <th>revenue_multiplier</th>
-                    <th>Historical final</th>
-                    <th>Include in final</th>
-                    <th>Final cleaned_publisher_name</th>
-                    <th>Final revenue_multiplier</th>
+                    {investigationSortColumns.slice(2).map((column) => <th key={column.field}><button type="button" className="table-sort-button" onClick={() => toggleInvestigationSort(column.field)}>{column.label}{investigationSortMarker(column.field)}</button></th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -1673,11 +1779,26 @@ export function SpecialCasesWorkbench() {
                       </td>
                     </tr>
                   ))}
+                  {!rows.length ? (
+                    <tr>
+                      <td colSpan={11} className="empty-table-cell">
+                        No affected apps match the applied filters.
+                      </td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>
             <div className="pagination-controls">
-              <span>{total.toLocaleString()} affected apps</span>
+              <span>
+                Showing {total ? `${((page - 1) * investigationPageSize + 1).toLocaleString()}–${Math.min(page * investigationPageSize, total).toLocaleString()}` : "0"} of {total.toLocaleString()} matching rows{unfilteredTotal !== total ? ` · ${unfilteredTotal.toLocaleString()} total` : ""}
+              </span>
+              <label>
+                Rows{" "}
+                <select value={investigationPageSize} onChange={(event) => { setInvestigationPageSize(Number(event.target.value) as (typeof pageSizes)[number]); setPage(1); }}>
+                  {pageSizes.map((size) => <option key={size}>{size}</option>)}
+                </select>
+              </label>
               <button
                 className="button button-secondary"
                 disabled={page <= 1}
@@ -1686,11 +1807,11 @@ export function SpecialCasesWorkbench() {
                 Previous
               </button>
               <span>
-                Page {page} of {Math.max(1, Math.ceil(total / 25))}
+                Page {page} of {Math.max(1, Math.ceil(total / investigationPageSize))}
               </span>
               <button
                 className="button button-secondary"
-                disabled={page >= Math.ceil(total / 25)}
+                disabled={page >= Math.ceil(total / investigationPageSize)}
                 onClick={() => setPage((current) => current + 1)}
               >
                 Next

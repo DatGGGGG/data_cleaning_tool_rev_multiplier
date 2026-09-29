@@ -796,13 +796,12 @@ export async function saveAppReviews(
 export async function getInvestigationPage(query: {
   page: number;
   pageSize: number;
-  search: string;
-  newOnly: boolean;
-  adjustmentsOnly: boolean;
-  incompleteOnly: boolean;
+  filters: import("@/lib/special-cases/types").SpecialCaseInvestigationFilterRule[];
+  sortField: import("@/lib/special-cases/types").SpecialCaseInvestigationSortField;
+  sortDirection: import("@/lib/special-cases/types").SpecialCaseInvestigationSortDirection;
 }) {
   const current = await store();
-  if (!current.currentSourceVersionId) return { rows: [], total: 0 };
+  if (!current.currentSourceVersionId) return { rows: [], total: 0, unfilteredTotal: 0 };
   const selected = await readSnapshot(current.currentSourceVersionId);
   const prior = current.comparisonSourceVersionId
     ? await readSnapshot(current.comparisonSourceVersionId)
@@ -821,30 +820,12 @@ export async function getInvestigationPage(query: {
     current.reviewsBySource[contextKey] ?? current.reviewsBySource[selected.id] ?? {},
     finalBaseline,
   );
-  const needle = text(query.search).toLowerCase();
-  if (needle)
-    rows = rows.filter((row) =>
-      [
-        row.appId,
-        row.name,
-        row.publisherName,
-        row.cleanedPublisherName,
-        row.publisherId,
-      ].some((value) => value.toLowerCase().includes(needle)),
-    );
-  if (query.newOnly) rows = rows.filter((row) => row.isNewSpecialCase);
-  if (query.adjustmentsOnly) rows = rows.filter((row) => row.needReadjustment);
-  if (query.incompleteOnly)
-    rows = rows.filter(
-      (row) =>
-        row.needReadjustment &&
-        (!row.adjustmentMode ||
-          (row.adjustmentMode === "set" && !row.adjustedCleanedPublisherName)),
-    );
-  rows.sort(
-    (a, b) =>
-      a.publisherName.localeCompare(b.publisherName) ||
-      a.name.localeCompare(b.name),
+  const unfilteredTotal = rows.length;
+  const { filterInvestigationRows, sortInvestigationRows } = await import("@/lib/special-cases/investigation-filters");
+  rows = sortInvestigationRows(
+    filterInvestigationRows(rows, query.filters),
+    query.sortField,
+    query.sortDirection,
   );
   const total = rows.length;
   const start =
@@ -852,6 +833,7 @@ export async function getInvestigationPage(query: {
   return {
     rows: rows.slice(start, start + Math.max(1, Math.min(100, query.pageSize))),
     total,
+    unfilteredTotal,
   };
 }
 export async function createSpecialCaseFinalVersion(actor: string) {

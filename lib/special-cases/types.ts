@@ -66,6 +66,58 @@ export type SpecialCaseInvestigationRow = SpecialCaseSourceRow & {
   notes: string;
 };
 
+/** Fields which may be filtered or sorted in the Step 4 investigation queue. */
+export type SpecialCaseInvestigationFilterField =
+  | "all"
+  | "appId"
+  | "name"
+  | "url"
+  | "publisherId"
+  | "publisherName"
+  | "cleanedPublisherName"
+  | "revenueMultiplier"
+  | "historicalCleanedPublisherName"
+  | "historicalRevenueMultiplier"
+  | "isNewSpecialCase"
+  | "isHistoricalFinal"
+  | "needReadjustment"
+  | "incomplete"
+  | "isChecked"
+  | "adjustmentMode"
+  | "adjustedCleanedPublisherName"
+  | "adjustedRevenueMultiplier"
+  | "notes";
+
+export type SpecialCaseInvestigationFilterOperator =
+  | "contains"
+  | "not_contains"
+  | "equals"
+  | "not_equals"
+  | "starts_with"
+  | "ends_with"
+  | "greater_than"
+  | "greater_than_or_equal"
+  | "less_than"
+  | "less_than_or_equal"
+  | "is_blank"
+  | "is_not_blank"
+  | "is"
+  | "is_not";
+
+export type SpecialCaseInvestigationFilterRule = {
+  id: string;
+  field: SpecialCaseInvestigationFilterField;
+  operator: SpecialCaseInvestigationFilterOperator;
+  value?: string;
+};
+
+export type SpecialCaseInvestigationSortField = Exclude<
+  SpecialCaseInvestigationFilterField,
+  "all" | "url" | "notes" | "incomplete"
+>;
+
+export type SpecialCaseInvestigationSortDirection = "asc" | "desc";
+
 export type SpecialCasePublisherGroup = {
   publisherName: string;
   cleanedPublisherName: string;

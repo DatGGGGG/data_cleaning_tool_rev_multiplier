@@ -583,6 +583,64 @@ textarea {
   min-width: 260px;
 }
 
+.special-cases-investigation-filters {
+  display: grid;
+  align-items: stretch;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line, #dbe3ed);
+  border-radius: var(--radius-md, 8px);
+  background: rgba(247, 250, 253, 0.84);
+}
+
+.filter-builder-heading,
+.filter-builder-row,
+.filter-builder-actions,
+.special-cases-quick-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-builder-heading {
+  justify-content: space-between;
+}
+
+.filter-builder-row {
+  padding: 7px;
+  border: 1px solid #e5ecf3;
+  border-radius: var(--radius-sm, 6px);
+  background: #fff;
+}
+
+.filter-builder-row select,
+.filter-builder-row input {
+  min-width: 160px;
+}
+
+.special-cases-quick-filters {
+  padding-top: 4px;
+  border-top: 1px solid #e5ecf3;
+}
+
+.table-sort-button {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.table-sort-button:hover {
+  color: var(--accent, #1e63aa);
+}
+
 .special-cases-review-summary {
   display: flex;
   flex-wrap: wrap;

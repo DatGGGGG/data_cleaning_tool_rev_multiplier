@@ -40,6 +40,8 @@ export type MappingArtifact = {
   source_workbench_version_label: string | null;
   source_artifact_ids: string[];
   source_artifact_checksums: Record<string, string>;
+  /** Server-recorded provenance. Special Cases uses this to retain its original local checksum. */
+  provenance?: Record<string, unknown>;
   validation: MappingArtifactValidation;
   generator_version: string | null;
   repository_git_sha: string | null;

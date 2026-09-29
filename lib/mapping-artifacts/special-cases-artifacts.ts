@@ -10,12 +10,15 @@ export function findArtifactForSpecialCasesVersion(
   version: SpecialCaseFinalVersion,
   artifacts: MappingArtifact[],
 ) {
+  // SensorTower canonicalizes Special Cases CSV before storage, so its recorded
+  // checksum can legitimately differ from the locally saved CSV checksum. The
+  // immutable workbench version ID is the stable publish identity; the pipeline
+  // rejects a second publication of that identity with different canonical bytes.
   return artifacts.find(
     (artifact) =>
       artifact.artifact_type === "special_cases" &&
       artifact.source_workbench_workflow === "special_cases" &&
-      artifact.source_workbench_version_id === version.id &&
-      artifact.checksum_sha256 === version.checksum,
+      artifact.source_workbench_version_id === version.id,
   ) ?? null;
 }
 

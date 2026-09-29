@@ -63,6 +63,10 @@ const sortableColumns: {
   { field: "isChecked", label: "Checked" },
 ];
 type Investigation = { rows: SpecialCaseInvestigationRow[]; total: number };
+type VersionActionFeedback = {
+  tone: "success" | "error" | "info";
+  message: string;
+};
 const sectionLinks = [
   { id: "special-cases-status", step: "Status", label: "Workflow status" },
   { id: "special-cases-source", step: "1", label: "Load App Full Info" },
@@ -81,6 +85,7 @@ export function SpecialCasesWorkbench() {
   const [publishingVersionId, setPublishingVersionId] = useState<string | null>(null);
   const [committingArtifactId, setCommittingArtifactId] = useState<string | null>(null);
   const [activatingArtifactId, setActivatingArtifactId] = useState<string | null>(null);
+  const [versionActionFeedback, setVersionActionFeedback] = useState<Record<string, VersionActionFeedback>>({});
   const [fullArtifactId, setFullArtifactId] = useState("");
   const [job, setJob] = useState<SpecialCaseJob | null>(null);
   const [rows, setRows] = useState<SpecialCaseInvestigationRow[]>([]);
@@ -180,9 +185,27 @@ export function SpecialCasesWorkbench() {
   const activeSpecialCases = activeSpecialCasesArtifact(activeArtifactState);
 
   async function json<T>(response: Response): Promise<T> {
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error?.message ?? "Request failed.");
+    const body = await response.json().catch(() => ({})) as {
+      error?: { code?: string; message?: string } | string;
+      error_code?: string;
+      message?: string;
+    };
+    if (!response.ok) {
+      const nested = typeof body.error === "object" ? body.error : null;
+      const code = nested?.code ?? body.error_code;
+      const detail = nested?.message ?? body.message ?? (typeof body.error === "string" ? body.error : "Request failed.");
+      throw new Error(code ? `${code}: ${detail}` : detail);
+    }
     return body as T;
+  }
+  function setVersionFeedback(versionId: string, feedback: VersionActionFeedback) {
+    setVersionActionFeedback((current) => ({ ...current, [versionId]: feedback }));
+  }
+  function upsertArtifact(nextArtifact: MappingArtifact) {
+    setArtifacts((current) => [
+      nextArtifact,
+      ...current.filter((artifact) => artifact.id !== nextArtifact.id),
+    ]);
   }
   async function refresh() {
     const [workbench, catalog, nextReadiness, active, history] = await Promise.all([
@@ -551,6 +574,7 @@ export function SpecialCasesWorkbench() {
   }
   async function publishSpecialCases(versionId: string) {
     setPublishingVersionId(versionId);
+    setVersionFeedback(versionId, { tone: "info", message: "Publishing draft to SensorTower…" });
     try {
       const result = await json<{ artifact: MappingArtifact }>(
         await fetch(appApiPath("/api/mapping-artifacts/publish/special-cases"), {
@@ -559,22 +583,29 @@ export function SpecialCasesWorkbench() {
           body: JSON.stringify({ versionId }),
         }),
       );
-      await refresh();
-      setMessage(
-        `Published Special Cases draft ${short(result.artifact.id)}. Review validation before committing.`,
-      );
+      upsertArtifact(result.artifact);
+      const publishedMessage = `Draft ${short(result.artifact.id)} published. Review validation, then commit it.`;
+      setVersionFeedback(versionId, { tone: "success", message: publishedMessage });
+      setMessage(publishedMessage);
+      try {
+        await refresh();
+      } catch {
+        setVersionFeedback(versionId, {
+          tone: "success",
+          message: `${publishedMessage} The catalog refresh failed, but this draft remains available on this page.`,
+        });
+      }
     } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not publish the Special Cases version.",
-      );
+      const detail = error instanceof Error ? error.message : "Could not publish the Special Cases version.";
+      setVersionFeedback(versionId, { tone: "error", message: detail });
+      setMessage(detail);
     } finally {
       setPublishingVersionId(null);
     }
   }
-  async function commitSpecialCases(artifactId: string) {
+  async function commitSpecialCases(artifactId: string, versionId: string) {
     setCommittingArtifactId(artifactId);
+    setVersionFeedback(versionId, { tone: "info", message: "Committing draft in SensorTower…" });
     try {
       const result = await json<{ artifact: MappingArtifact }>(
         await fetch(
@@ -582,19 +613,27 @@ export function SpecialCasesWorkbench() {
           { method: "POST" },
         ),
       );
-      await refresh();
-      setMessage(`Committed Special Cases artifact ${short(result.artifact.id)}.`);
+      upsertArtifact(result.artifact);
+      const committedMessage = `Committed Special Cases artifact ${short(result.artifact.id)}. It is now visible in Artifact Registry.`;
+      setVersionFeedback(versionId, { tone: "success", message: committedMessage });
+      setMessage(committedMessage);
+      try {
+        await refresh();
+      } catch {
+        setVersionFeedback(versionId, {
+          tone: "success",
+          message: `${committedMessage} The catalog refresh failed, but the committed status is retained on this page.`,
+        });
+      }
     } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not commit the Special Cases draft.",
-      );
+      const detail = error instanceof Error ? error.message : "Could not commit the Special Cases draft.";
+      setVersionFeedback(versionId, { tone: "error", message: detail });
+      setMessage(detail);
     } finally {
       setCommittingArtifactId(null);
     }
   }
-  async function activateSpecialCases(artifact: MappingArtifact) {
+  async function activateSpecialCases(artifact: MappingArtifact, versionId: string) {
     if (
       !window.confirm(
         specialCasesActivationConfirmationMessage(artifact, activeSpecialCases),
@@ -603,6 +642,7 @@ export function SpecialCasesWorkbench() {
       return;
     }
     setActivatingArtifactId(artifact.id);
+    setVersionFeedback(versionId, { tone: "info", message: "Activating committed Special Cases artifact…" });
     try {
       const result = await json<MappingArtifactActivationResponse>(
         await fetch(
@@ -611,14 +651,21 @@ export function SpecialCasesWorkbench() {
         ),
       );
       setActiveArtifactState(result.active);
-      await refresh();
-      setMessage(`Activated Special Cases artifact ${short(artifact.id)}.`);
+      const activatedMessage = `Activated Special Cases artifact ${short(artifact.id)}.`;
+      setVersionFeedback(versionId, { tone: "success", message: activatedMessage });
+      setMessage(activatedMessage);
+      try {
+        await refresh();
+      } catch {
+        setVersionFeedback(versionId, {
+          tone: "success",
+          message: `${activatedMessage} The latest status refresh failed; use Refresh to reconcile it.`,
+        });
+      }
     } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not activate the Special Cases artifact.",
-      );
+      const detail = error instanceof Error ? error.message : "Could not activate the Special Cases artifact.";
+      setVersionFeedback(versionId, { tone: "error", message: detail });
+      setMessage(detail);
     } finally {
       setActivatingArtifactId(null);
     }
@@ -1786,7 +1833,7 @@ export function SpecialCasesWorkbench() {
                             type="button"
                             title={commitReason ?? undefined}
                             disabled={Boolean(commitReason) || committingArtifactId === artifact.id}
-                            onClick={() => void commitSpecialCases(artifact.id)}
+                            onClick={() => void commitSpecialCases(artifact.id, version.id)}
                           >
                             {artifact.status === "committed"
                               ? "Committed"
@@ -1803,7 +1850,7 @@ export function SpecialCasesWorkbench() {
                             type="button"
                             title={activateReason ?? undefined}
                             disabled={Boolean(activateReason) || activatingArtifactId === artifact.id}
-                            onClick={() => void activateSpecialCases(artifact)}
+                            onClick={() => void activateSpecialCases(artifact, version.id)}
                           >
                             {activatingArtifactId === artifact.id
                               ? "Activating…"
@@ -1843,6 +1890,18 @@ export function SpecialCasesWorkbench() {
                         Not published to the SensorTower artifact registry yet.
                       </p>
                     )}
+                    {versionActionFeedback[version.id] ? (
+                      <p
+                        className={
+                          versionActionFeedback[version.id].tone === "error"
+                            ? "error-text special-cases-artifact-feedback"
+                            : "muted-text special-cases-artifact-feedback"
+                        }
+                        role="status"
+                      >
+                        {versionActionFeedback[version.id].message}
+                      </p>
+                    ) : null}
                   </article>
                 );
               })}

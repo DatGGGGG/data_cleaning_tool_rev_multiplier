@@ -124,7 +124,7 @@ export function MappingArtifactRegistry() {
 
     <section className="surface-card">
       <div className="section-heading"><div><h2>Committed artifacts</h2><p>Newest committed artifacts appear first. This is a read-only cross-workflow audit view; manage activation from the owning workflow page.</p></div></div>
-      {visibleArtifacts.length === 0 ? <p className="muted-text">No committed artifacts match the current filters.</p> : <div className="artifact-registry-list">{visibleArtifacts.map((artifact) => {
+      {visibleArtifacts.length === 0 ? <p className="muted-text">No committed artifacts match the current filters. Drafts are reviewed and committed from their owning workflow page, then appear here.</p> : <div className="artifact-registry-list">{visibleArtifacts.map((artifact) => {
         const active = artifact.artifact_type === "full"
           ? isActiveFullArtifact(artifact.id, activeFull)
           : artifact.artifact_type === "special_cases"

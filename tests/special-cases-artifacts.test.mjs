@@ -21,11 +21,11 @@ function artifact(overrides = {}) {
   };
 }
 
-test("a local Special Cases final version only matches its exact published artifact", async () => {
+test("a local Special Cases final version reconnects by immutable source version even when SensorTower canonicalizes its checksum", async () => {
   const { findArtifactForSpecialCasesVersion } = await import("../lib/mapping-artifacts/special-cases-artifacts.ts");
   const published = artifact();
   assert.equal(findArtifactForSpecialCasesVersion(version, [published])?.id, published.id);
-  assert.equal(findArtifactForSpecialCasesVersion(version, [artifact({ checksum_sha256: "wrong" })]), null);
+  assert.equal(findArtifactForSpecialCasesVersion(version, [artifact({ checksum_sha256: "canonical-checksum-different-from-local" })])?.id, "special-cases-artifact");
   assert.equal(findArtifactForSpecialCasesVersion(version, [artifact({ source_workbench_workflow: "top_down" })]), null);
 });
 

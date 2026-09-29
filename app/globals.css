@@ -706,6 +706,13 @@ textarea {
   border-top: 1px solid var(--border, #dbe3ed);
 }
 
+.special-cases-artifact-feedback {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #f5f8fc;
+}
+
 .special-cases-active-artifact {
   display: grid;
   gap: 8px;
